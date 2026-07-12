@@ -363,6 +363,29 @@ async def test_listed_quick_command_runs_for_non_admin():
 
 
 @pytest.mark.asyncio
+async def test_underscored_quick_command_checks_access_with_configured_key():
+    """Telegram normaliza el nombre, pero la política evalúa la clave configurada."""
+    runner = _make_runner(
+        platform_extra={
+            "allow_admin_from": ["111"],
+            "user_allowed_commands": ["reiniciar-agentes"],
+        }
+    )
+    runner.config.quick_commands = {
+        "reiniciar-agentes": {
+            "type": "exec",
+            "command": "printf quick-command-normalized",
+        }
+    }
+
+    result = await runner._handle_message(
+        _make_event("/reiniciar_agentes", _make_source(user_id="999"))
+    )
+
+    assert result == "quick-command-normalized"
+
+
+@pytest.mark.asyncio
 async def test_admin_runs_quick_command_when_gating_enabled():
     """An admin runs the quick command even under an enabled gate with an
     empty user_allowed_commands list."""

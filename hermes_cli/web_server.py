@@ -10097,6 +10097,7 @@ class CronJobCreate(BaseModel):
     enabled_toolsets: Optional[List[str]] = None
     workdir: Optional[str] = None
     no_agent: bool = False
+    followup_message: Optional[str] = None
 
 
 class CronJobUpdate(BaseModel):
@@ -10181,7 +10182,7 @@ def _normalize_dashboard_cron_updates(
     """
     normalized = dict(updates or {})
 
-    for key in ("model", "provider", "workdir"):
+    for key in ("model", "provider", "workdir", "followup_message"):
         if key in normalized:
             normalized[key] = _cron_optional_text(normalized[key])
     if "script" in normalized:
@@ -10419,6 +10420,7 @@ def _create_cron_job_sync(body: CronJobCreate, profile: str = "default"):
             enabled_toolsets=_cron_string_list(body.enabled_toolsets),
             workdir=_cron_optional_text(body.workdir),
             no_agent=no_agent,
+            followup_message=_cron_optional_text(body.followup_message),
         )
     except HTTPException:
         raise

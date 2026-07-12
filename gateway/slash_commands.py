@@ -1320,7 +1320,7 @@ class GatewaySlashCommandsMixin:
     async def _handle_help_command(self, event: MessageEvent) -> str:
         """Handle /help command - list available commands."""
         from gateway.run import _telegramize_command_mentions
-        from hermes_cli.commands import gateway_help_lines
+        from hermes_cli.commands import gateway_help_lines, quick_command_help_lines
         lines = [
             t("gateway.help.header"),
             *gateway_help_lines(),
@@ -1338,6 +1338,9 @@ class GatewaySlashCommandsMixin:
                     lines.append(t("gateway.help.more_use_commands", count=len(sorted_cmds) - 10))
         except Exception:
             pass
+        quick_lines = quick_command_help_lines()
+        if quick_lines:
+            lines.extend(["", *quick_lines])
         return _telegramize_command_mentions(
             "\n".join(lines),
             getattr(getattr(event, "source", None), "platform", None),
@@ -1345,7 +1348,7 @@ class GatewaySlashCommandsMixin:
 
     async def _handle_commands_command(self, event: MessageEvent) -> str:
         from gateway.run import _telegramize_command_mentions
-        from hermes_cli.commands import gateway_help_lines
+        from hermes_cli.commands import gateway_help_lines, quick_command_help_lines
 
         raw_args = event.get_command_args().strip()
         if raw_args:
@@ -1369,6 +1372,9 @@ class GatewaySlashCommandsMixin:
                     entries.append(f"`{cmd}` — {desc}")
         except Exception:
             pass
+        quick_lines = quick_command_help_lines()
+        if quick_lines:
+            entries.extend(["", *quick_lines])
 
         if not entries:
             return t("gateway.commands.none")

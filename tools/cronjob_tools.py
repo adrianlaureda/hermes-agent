@@ -598,6 +598,8 @@ def _format_job(job: Dict[str, Any]) -> Dict[str, Any]:
         result["enabled_toolsets"] = job["enabled_toolsets"]
     if job.get("workdir"):
         result["workdir"] = job["workdir"]
+    if job.get("followup_message"):
+        result["followup_message"] = job["followup_message"]
     return result
 
 
@@ -676,6 +678,7 @@ def cronjob(
     enabled_toolsets: Optional[List[str]] = None,
     workdir: Optional[str] = None,
     no_agent: Optional[bool] = None,
+    followup_message: Optional[str] = None,
     attach_to_session: Optional[bool] = None,
     task_id: str = None,
 ) -> str:
@@ -749,6 +752,7 @@ def cronjob(
                 enabled_toolsets=enabled_toolsets or None,
                 workdir=_normalize_optional_job_value(workdir),
                 no_agent=_no_agent,
+                followup_message=_normalize_optional_job_value(followup_message),
                 attach_to_session=attach_to_session,
             )
             _notify_provider_jobs_changed_safe()
@@ -923,6 +927,10 @@ def cronjob(
                 updates["enabled_toolsets"] = enabled_toolsets or None
             if attach_to_session is not None:
                 updates["attach_to_session"] = bool(attach_to_session)
+            if followup_message is not None:
+                updates["followup_message"] = _normalize_optional_job_value(
+                    followup_message
+                )
             if workdir is not None:
                 # Empty string clears the field (restores old behaviour);
                 # otherwise pass raw — update_job() validates / normalizes.
@@ -1016,6 +1024,10 @@ Important safety rule: cron-run sessions should not recursively schedule more cr
             "deliver": {
                 "type": "string",
                 "description": "Omit this parameter to auto-deliver back to the current chat and topic (recommended). Auto-detection preserves thread/topic context. Only set explicitly when the user asks to deliver somewhere OTHER than the current conversation. Values: 'origin' (same as omitting), 'local' (no delivery, save only), 'all' (fan out to every connected home channel), or platform:chat_id:thread_id for a specific destination. Combine with comma: 'origin,all' delivers to the origin plus every other connected channel. Examples: 'telegram:-1001234567890:17585', 'discord:#engineering', 'sms:+15551234567', 'all'. WARNING: 'platform:chat_id' without :thread_id loses topic targeting. 'all' resolves at fire time, so a job created before a channel was wired up will pick it up automatically once connected."
+            },
+            "followup_message": {
+                "type": "string",
+                "description": "Optional exact second message delivered only after the primary message succeeds. It is not sent for [SILENT], agent errors, or primary-delivery failures. On update, pass an empty string to clear. Useful for clean copyable checklists that must stay separate from the agent's report."
             },
             "skills": {
                 "type": "array",
@@ -1140,6 +1152,7 @@ registry.register(
         enabled_toolsets=args.get("enabled_toolsets"),
         workdir=args.get("workdir"),
         no_agent=args.get("no_agent"),
+        followup_message=args.get("followup_message"),
         task_id=kw.get("task_id"),
     ))(),
     check_fn=check_cronjob_requirements,

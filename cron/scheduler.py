@@ -3514,6 +3514,31 @@ def run_one_job(job: dict, *, adapters=None, loop=None, verbose: bool = False) -
                 except Exception as de:
                     delivery_error = str(de)
                     logger.error("Delivery failed for job %s: %s", job["id"], de)
+
+                # El follow-up forma parte de una entrega compuesta: solo se
+                # intenta tras una respuesta y entrega principal exitosas.
+                # Los fallos del agente conservan su único aviso histórico.
+                followup_message = job.get("followup_message")
+                if (
+                    success
+                    and delivery_error is None
+                    and isinstance(followup_message, str)
+                    and followup_message.strip()
+                ):
+                    try:
+                        delivery_error = _deliver_result(
+                            job,
+                            followup_message.strip(),
+                            adapters=adapters,
+                            loop=loop,
+                        )
+                    except Exception as de:
+                        delivery_error = str(de)
+                        logger.error(
+                            "Follow-up delivery failed for job %s: %s",
+                            job["id"],
+                            de,
+                        )
         finally:
             # Tear down the deferred agent(s) now that save + delivery have run
             # (or raised). Must happen on every path so cron agents never leak

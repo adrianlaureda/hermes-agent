@@ -39,3 +39,13 @@ def test_cronjob_schema_required_array_unchanged():
     from tools.cronjob_tools import CRONJOB_SCHEMA
 
     assert CRONJOB_SCHEMA["parameters"]["required"] == ["action"]
+
+
+def test_cronjob_schema_declares_optional_followup_message():
+    """El modelo puede crear o actualizar la segunda entrega explícitamente."""
+    from tools.cronjob_tools import CRONJOB_SCHEMA
+
+    field = CRONJOB_SCHEMA["parameters"]["properties"]["followup_message"]
+    assert field["type"] == "string"
+    assert "second" in field["description"].lower()
+    assert "followup_message" not in CRONJOB_SCHEMA["parameters"]["required"]

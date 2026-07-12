@@ -14,7 +14,7 @@ import cron.scheduler as s
 
 
 def _patch_pipeline(monkeypatch, *, success=True, output="out", final="final response",
-                    error=None, silent_marker_in=None):
+                    error=None, silent_marker_in=None, delivery_results=None):
     """Patch the job pipeline primitives and record the call order."""
     calls = []
 
@@ -27,9 +27,11 @@ def _patch_pipeline(monkeypatch, *, success=True, output="out", final="final res
         calls.append(("save", jid))
         return f"/tmp/{jid}.txt"
 
+    delivery_results = iter(delivery_results or [])
+
     def fake_deliver(job, content, adapters=None, loop=None):
-        calls.append(("deliver", job["id"]))
-        return None
+        calls.append(("deliver", job["id"], content))
+        return next(delivery_results, None)
 
     def fake_mark(jid, ok, err=None, delivery_error=None):
         calls.append(("mark", jid, ok))
@@ -64,6 +66,67 @@ def test_run_one_job_success_sequence(monkeypatch):
     assert ok is True
     assert [c[0] for c in calls] == ["run_job", "save", "deliver", "mark"]
     assert calls[-1] == ("mark", "j2", True)
+
+
+def test_run_one_job_delivers_followup_after_primary(monkeypatch):
+    """El follow-up se entrega como segundo mensaje tras el principal."""
+    calls = _patch_pipeline(monkeypatch, final="Brief principal")
+
+    s.run_one_job({
+        "id": "j-followup",
+        "name": "routine",
+        "followup_message": "- Sueño:\n- Prioridad:",
+    })
+
+    deliveries = [call[2] for call in calls if call[0] == "deliver"]
+    assert deliveries == ["Brief principal", "- Sueño:\n- Prioridad:"]
+
+
+def test_run_one_job_silent_skips_followup(monkeypatch):
+    """[SILENT] suprime tanto el principal como el follow-up."""
+    calls = _patch_pipeline(monkeypatch, silent_marker_in="[SILENT]")
+
+    s.run_one_job({
+        "id": "j-followup-silent",
+        "name": "routine",
+        "followup_message": "- Sueño:\n- Prioridad:",
+    })
+
+    assert not [call for call in calls if call[0] == "deliver"]
+
+
+def test_run_one_job_primary_delivery_failure_skips_followup(monkeypatch):
+    """Si falla la entrega principal no se intenta entregar la plantilla."""
+    calls = _patch_pipeline(
+        monkeypatch,
+        final="Brief principal",
+        delivery_results=["telegram unavailable"],
+    )
+
+    s.run_one_job({
+        "id": "j-followup-delivery-failure",
+        "name": "routine",
+        "followup_message": "- Sueño:\n- Prioridad:",
+    })
+
+    deliveries = [call[2] for call in calls if call[0] == "deliver"]
+    assert deliveries == ["Brief principal"]
+
+
+def test_run_one_job_agent_failure_delivers_error_but_skips_followup(monkeypatch):
+    """Un fallo del agente conserva un aviso principal y omite la plantilla."""
+    calls = _patch_pipeline(monkeypatch, success=False, final="", error="boom")
+
+    s.run_one_job({
+        "id": "j-followup-agent-failure",
+        "name": "routine",
+        "followup_message": "- Sueño:\n- Prioridad:",
+    })
+
+    deliveries = [call[2] for call in calls if call[0] == "deliver"]
+    assert len(deliveries) == 1
+    assert "failed: boom" in deliveries[0]
+    assert deliveries[0] != "- Sueño:\n- Prioridad:"
 
 
 def test_run_one_job_silent_skips_delivery(monkeypatch):

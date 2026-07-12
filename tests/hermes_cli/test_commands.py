@@ -262,6 +262,72 @@ class TestTelegramBotCommands:
         assert "codex_runtime" in names
         assert "codex-runtime" not in names
 
+    def test_quick_commands_are_visible_before_menu_overflow(self, monkeypatch):
+        monkeypatch.setattr(
+            "hermes_cli.config.read_raw_config",
+            lambda: {
+                "quick_commands": {
+                    "reiniciar-agentes": {
+                        "type": "exec",
+                        "command": "echo restart",
+                        "description": "Reiniciar agentes",
+                    }
+                }
+            },
+        )
+
+        menu, _hidden = telegram_menu_commands(max_commands=30)
+
+        assert "reiniciar_agentes" in {name for name, _ in menu}
+
+    def test_quick_command_cannot_shadow_core_command(self, monkeypatch):
+        monkeypatch.setattr(
+            "hermes_cli.config.read_raw_config",
+            lambda: {
+                "quick_commands": {
+                    "help": {
+                        "type": "exec",
+                        "command": "echo shadow",
+                        "description": "Shadowed help",
+                    }
+                }
+            },
+        )
+
+        menu, _hidden = telegram_menu_commands(max_commands=100)
+        help_entries = [(name, desc) for name, desc in menu if name == "help"]
+
+        assert len(help_entries) == 1
+        assert help_entries[0][1] != "Shadowed help"
+
+    def test_configured_effective_priority_precedes_quick_commands(self, monkeypatch):
+        monkeypatch.setattr(
+            "hermes_cli.config.read_raw_config",
+            lambda: {
+                "platforms": {
+                    "telegram": {
+                        "extra": {
+                            "command_menu": {
+                                "priority_mode": "replace",
+                                "priority": ["version"],
+                            }
+                        }
+                    }
+                },
+                "quick_commands": {
+                    "atajo": {
+                        "type": "exec",
+                        "command": "echo shortcut",
+                        "description": "Atajo",
+                    }
+                },
+            },
+        )
+
+        menu, _hidden = telegram_menu_commands(max_commands=2)
+
+        assert [name for name, _ in menu] == ["version", "atajo"]
+
 
 class TestSlackSubcommandMap:
     def test_returns_dict(self):

@@ -1,7 +1,7 @@
 """Tests for user-defined quick commands that bypass the agent loop."""
 import os
 import subprocess
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from rich.text import Text
 import pytest
 
@@ -82,6 +82,14 @@ class TestCLIQuickCommands:
             cli.process_command("/sc some args")
             spy.assert_any_call("/context some args")
 
+    def test_telegram_underscore_form_routes_to_hyphenated_alias(self):
+        """La forma válida en Telegram resuelve la clave configurada con guion."""
+        cli = self._make_cli({"reiniciar-agentes": {"type": "alias", "target": "/help"}})
+        with patch.object(cli, "process_command", wraps=cli.process_command) as spy:
+            cli.process_command("/reiniciar_agentes")
+
+        spy.assert_any_call("/help")
+
     def test_alias_no_target_shows_error(self):
         cli = self._make_cli({"broken": {"type": "alias", "target": ""}})
         cli.process_command("/broken")
@@ -159,6 +167,27 @@ class TestGatewayQuickCommands:
         event = self._make_event("limits")
         result = await runner._handle_message(event)
         assert result == "ok"
+
+    @pytest.mark.asyncio
+    async def test_telegram_underscore_form_routes_to_hyphenated_alias(self):
+        """El gateway usa la clave configurada al resolver un alias de Telegram."""
+        from gateway.run import GatewayRunner
+
+        runner = GatewayRunner.__new__(GatewayRunner)
+        runner.config = {
+            "quick_commands": {
+                "reiniciar-agentes": {"type": "alias", "target": "/help"},
+            }
+        }
+        runner._running_agents = {}
+        runner._pending_messages = {}
+        runner._is_user_authorized = MagicMock(return_value=True)
+        runner._handle_help_command = AsyncMock(return_value="help-ok")
+
+        result = await runner._handle_message(self._make_event("reiniciar_agentes"))
+
+        assert result == "help-ok"
+        runner._handle_help_command.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_exec_command_does_not_leak_credentials(self):
