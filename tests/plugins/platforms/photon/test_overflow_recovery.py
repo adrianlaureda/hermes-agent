@@ -200,6 +200,41 @@ async def test_clean_shutdown_does_not_raise_fatal(
 
 
 @pytest.mark.asyncio
+async def test_short_degraded_stream_health_waits_for_restart_threshold(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adapter = _make_adapter(monkeypatch)
+    adapter._inbound_running = True
+    adapter._sidecar_health_interval = 0.0
+    calls = 0
+
+    async def _fake_call(path: str, payload: Dict[str, Any]) -> Any:
+        nonlocal calls
+        assert path == "/healthz"
+        calls += 1
+        if calls == 1:
+            return {
+                "ok": True,
+                "stream": {
+                    "ok": False,
+                    "state": "degraded",
+                    "degradedForMs": 10000,
+                    "restartAfterMs": 90000,
+                    "lastIssue": "temporary network interruption",
+                },
+            }
+        adapter._inbound_running = False
+        return {"ok": True, "stream": {"ok": True, "state": "healthy"}}
+
+    monkeypatch.setattr(adapter, "_sidecar_call", _fake_call)
+
+    await adapter._monitor_sidecar_health()
+
+    assert calls == 2
+    assert adapter.has_fatal_error is False
+
+
+@pytest.mark.asyncio
 async def test_degraded_stream_health_raises_retryable_fatal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
