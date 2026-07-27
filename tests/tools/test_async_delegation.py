@@ -269,6 +269,28 @@ def test_completion_is_persisted_and_delivery_can_be_acknowledged(tmp_path, monk
     assert ad.get_durable_delegation(dispatched["delegation_id"])["delivery_state"] == "delivered"
 
 
+def test_orphan_completion_is_discarded_and_not_restored_again(tmp_path, monkeypatch):
+    """Fail-closed orphan drops must not requeue the same completion forever."""
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    record = {
+        "delegation_id": "deleg_orphan",
+        "session_key": "owner",
+        "origin_ui_session_id": "",
+        "parent_session_id": None,
+        "dispatched_at": 1.0,
+    }
+    ad._persist_dispatch(record)
+    ad._persist_completion(
+        {"delegation_id": "deleg_orphan", "status": "completed", "completed_at": 2.0},
+        {"status": "completed", "summary": "orphaned"},
+    )
+
+    assert ad.restore_undelivered_completions(queue.Queue()) == 1
+    assert ad.discard_completion_delivery("deleg_orphan")
+    assert ad.restore_undelivered_completions(queue.Queue()) == 0
+    assert ad.get_durable_delegation("deleg_orphan")["delivery_state"] == "discarded"
+
+
 def test_real_process_restart_restores_owned_completion_once(tmp_path):
     """Real-import E2E: a fresh interpreter restores a prior process's result."""
     repo = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
@@ -871,5 +893,4 @@ def test_gateway_cli_origin_event_left_unrouted():
     evt = _make_async_evt(session_key="")
     runner._enrich_async_delegation_routing(evt)
     assert "platform" not in evt
-
 

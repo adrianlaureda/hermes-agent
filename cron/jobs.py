@@ -405,6 +405,9 @@ def _normalize_job_record(job: Dict[str, Any]) -> Dict[str, Any]:
     prompt = _coerce_job_text(normalized.get("prompt"))
     normalized["id"] = job_id
     normalized["prompt"] = prompt
+    normalized["followup_message"] = _coerce_job_text(
+        normalized.get("followup_message")
+    ).strip() or None
 
     name = _coerce_job_text(normalized.get("name")).strip()
     if not name:
@@ -1053,6 +1056,7 @@ def create_job(
     enabled_toolsets: Optional[List[str]] = None,
     workdir: Optional[str] = None,
     no_agent: bool = False,
+    followup_message: Optional[str] = None,
     attach_to_session: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """
@@ -1098,6 +1102,9 @@ def create_job(
                 and deliver its stdout directly. Empty stdout = silent (no
                 delivery). Requires ``script`` to be set. Ideal for classic
                 watchdogs and periodic alerts that don't need LLM reasoning.
+        followup_message: Optional second message delivered after a successful
+                primary delivery. It is skipped for silent runs, agent errors,
+                or primary-delivery failures.
 
     Returns:
         The created job dict
@@ -1129,6 +1136,7 @@ def create_job(
     normalized_toolsets = normalized_toolsets or None
     normalized_workdir = _normalize_workdir(workdir)
     normalized_no_agent = bool(no_agent)
+    normalized_followup = _normalize_job_optional_text(followup_message)
     normalized_attach = attach_to_session if isinstance(attach_to_session, bool) else None
 
     # no_agent jobs are meaningless without a script — the script IS the job.
@@ -1217,6 +1225,7 @@ def create_job(
         # Delivery configuration
         "deliver": deliver,
         "origin": origin,  # Tracks where job was created for "origin" delivery
+        "followup_message": normalized_followup,
         "enabled_toolsets": normalized_toolsets,
         "workdir": normalized_workdir,
     }
@@ -1314,6 +1323,11 @@ def update_job(job_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]
                     updates["workdir"] = None
                 else:
                     updates["workdir"] = _normalize_workdir(_wd)
+
+            if "followup_message" in updates:
+                updates["followup_message"] = _normalize_job_optional_text(
+                    updates["followup_message"]
+                )
 
             previous_inference_axes = _normalized_inference_axes(job)
             updated = _apply_skill_fields({**job, **updates})

@@ -278,6 +278,30 @@ async def test_create_cron_job_normalizes_representative_core_fields(
 
 
 @pytest.mark.asyncio
+async def test_dashboard_cron_followup_message_roundtrip_and_preservation(isolated_profiles):
+    """La API Desktop declara, persiste y conserva el follow-up al editar."""
+    from hermes_cli import web_server
+
+    message = "- Energía:\n- Prioridad:"
+    job = await web_server.create_cron_job(
+        web_server.CronJobCreate(
+            prompt="daily brief",
+            schedule="every 1h",
+            followup_message=message,
+        ),
+        profile="worker_alpha",
+    )
+    assert job["followup_message"] == message
+
+    updated = await web_server.update_cron_job(
+        job["id"],
+        web_server.CronJobUpdate(updates={"name": "renamed"}),
+        profile="worker_alpha",
+    )
+    assert updated["followup_message"] == message
+
+
+@pytest.mark.asyncio
 async def test_cron_mutation_without_profile_finds_named_profile_job(isolated_profiles):
     from hermes_cli import web_server
 

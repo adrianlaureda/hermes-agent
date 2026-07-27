@@ -562,7 +562,26 @@ class PhotonAdapter(BasePlatformAdapter):
 
             state = str(stream.get("state") or "unknown")
             degraded_for_ms = stream.get("degradedForMs")
+            restart_after_ms = stream.get("restartAfterMs")
             last_issue = str(stream.get("lastIssue") or "unknown stream issue")
+
+            # El sidecar informa de interrupciones breves mientras intenta
+            # reconectar. No derribar todo el gateway antes de que venza su
+            # propio umbral de recuperación.
+            if (
+                isinstance(degraded_for_ms, (int, float))
+                and isinstance(restart_after_ms, (int, float))
+                and restart_after_ms > 0
+                and degraded_for_ms < restart_after_ms
+            ):
+                logger.warning(
+                    "[photon] upstream stream temporarily degraded "
+                    "(%sms/%sms); waiting for sidecar recovery",
+                    degraded_for_ms,
+                    restart_after_ms,
+                )
+                continue
+
             message = (
                 "Photon upstream stream degraded"
                 f" (state={state}, degradedForMs={degraded_for_ms}): "

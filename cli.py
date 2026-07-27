@@ -8905,8 +8905,12 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin):
             skill_commands = _ensure_skill_commands()
             skill_bundles = get_skill_bundles()
             quick_commands = self.config.get("quick_commands", {})
-            if base_cmd.lstrip("/") in quick_commands:
-                qcmd = quick_commands[base_cmd.lstrip("/")]
+            from hermes_cli.commands import resolve_quick_command
+            quick_key, qcmd = resolve_quick_command(
+                quick_commands,
+                base_cmd.lstrip("/"),
+            )
+            if qcmd is not None:
                 if qcmd.get("type") == "exec":
                     import subprocess
                     exec_cmd = qcmd.get("command", "")
@@ -8935,7 +8939,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin):
                         except Exception as e:
                             self._console_print(f"[bold red]Quick command error: {e}[/]")
                     else:
-                        self._console_print(f"[bold red]Quick command '{base_cmd}' has no command defined[/]")
+                        self._console_print(f"[bold red]Quick command '{quick_key}' has no command defined[/]")
                 elif qcmd.get("type") == "alias":
                     target = qcmd.get("target", "").strip()
                     if target:
@@ -8944,9 +8948,9 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin):
                         aliased_command = f"{target} {user_args}".strip()
                         return self.process_command(aliased_command)
                     else:
-                        self._console_print(f"[bold red]Quick command '{base_cmd}' has no target defined[/]")
+                        self._console_print(f"[bold red]Quick command '{quick_key}' has no target defined[/]")
                 else:
-                    self._console_print(f"[bold red]Quick command '{base_cmd}' has unsupported type (supported: 'exec', 'alias')[/]")
+                    self._console_print(f"[bold red]Quick command '{quick_key}' has unsupported type (supported: 'exec', 'alias')[/]")
             # Check for plugin-registered slash commands
             elif base_cmd.lstrip("/") in _get_plugin_cmd_handler_names():
                 from hermes_cli.plugins import (

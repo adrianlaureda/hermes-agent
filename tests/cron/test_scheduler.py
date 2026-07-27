@@ -54,6 +54,26 @@ class TestPerJobToolsetMcpMerge:
         result = _merge_mcp_into_per_job_toolsets(["web"], {})
         assert result == ["web"]
 
+    def test_lone_no_mcp_sentinel_does_not_yield_zero_tools(self):
+        """``["no_mcp"]`` a secas pedia "sin MCP", no "sin herramientas".
+
+        Antes devolvia ``[]``, y un allowlist vacio hace que la peticion salga
+        sin clave ``tools``: el modelo no puede emitir tool calls y el job
+        entrega un resultado mudo. Debe caer al fallback de plataforma.
+        """
+        result = _resolve_cron_enabled_toolsets({"enabled_toolsets": ["no_mcp"]}, self.CFG)
+        assert result, "el centinela en solitario dejo al agente sin herramientas"
+        assert not (set(result) & self._enabled_names()), "no_mcp debe seguir excluyendo MCP"
+
+    def test_lone_no_mcp_sentinel_keeps_native_file_toolset(self):
+        result = _resolve_cron_enabled_toolsets({"enabled_toolsets": ["no_mcp"]}, self.CFG)
+        assert "file" in result
+
+    def test_sentinel_with_native_toolsets_is_unchanged(self):
+        """Regresion: el caso ya cubierto no debe cambiar de comportamiento."""
+        result = _resolve_cron_enabled_toolsets({"enabled_toolsets": ["web", "no_mcp"]}, self.CFG)
+        assert result == ["web"]
+
     def test_no_duplicate_when_listed_name_also_globally_enabled(self):
         result = _merge_mcp_into_per_job_toolsets(["finnhub", "finnhub"], self.CFG)
         assert result.count("finnhub") == 2  # input dups preserved, none added

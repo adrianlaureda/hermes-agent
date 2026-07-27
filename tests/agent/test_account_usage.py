@@ -118,6 +118,36 @@ def test_codex_usage_falls_back_to_native_credential_pool(monkeypatch, codex_usa
     assert "ChatGPT-Account-Id" not in calls[0]["headers"]
 
 
+def test_codex_usage_does_not_probe_pool_after_relogin_required_auth_error(
+    monkeypatch,
+):
+    """A terminal auth-store error must fail open, not re-probe an exhausted pool."""
+    monkeypatch.setattr(
+        account_usage,
+        "resolve_codex_runtime_credentials",
+        lambda **kwargs: (_ for _ in ()).throw(
+            account_usage.AuthError(
+                "refresh token reused",
+                provider="openai-codex",
+                code="refresh_token_reused",
+                relogin_required=True,
+            )
+        ),
+    )
+
+    import agent.credential_pool as credential_pool
+
+    calls = []
+    monkeypatch.setattr(
+        credential_pool,
+        "load_pool",
+        lambda provider: calls.append(provider) or SimpleNamespace(select=lambda: None),
+    )
+
+    assert account_usage.fetch_account_usage("openai-codex") is None
+    assert calls == []
+
+
 def test_codex_usage_does_not_swap_to_pool_on_transient_resolver_error(monkeypatch, codex_usage_payload):
     """A transient refresh/network failure (non-AuthError) must NOT silently
     downgrade to a possibly-different pool account. It fails open (no snapshot)

@@ -9773,6 +9773,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         from hermes_cli.commands import (
             GATEWAY_KNOWN_COMMANDS,
             is_gateway_known_command,
+            resolve_quick_command,
             resolve_command as _resolve_cmd,
         )
 
@@ -9790,9 +9791,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 quick_commands = self.config.get("quick_commands", {}) or {}
             else:
                 quick_commands = getattr(self.config, "quick_commands", {}) or {}
-            if isinstance(quick_commands, dict) and command in quick_commands:
-                qcmd = quick_commands[command]
+            quick_key, qcmd = resolve_quick_command(quick_commands, command)
+            if qcmd is not None:
                 if qcmd.get("type") == "alias":
+                    _denied = self._check_slash_access(source, quick_key)
+                    if _denied is not None:
+                        return _denied
                     target = (qcmd.get("target") or "").strip()
                     if target:
                         target = target if target.startswith("/") else f"/{target}"
@@ -10164,7 +10168,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 quick_commands = getattr(self.config, "quick_commands", {}) or {}
             if not isinstance(quick_commands, dict):
                 quick_commands = {}
-            if command in quick_commands:
+            quick_key, qcmd = resolve_quick_command(quick_commands, command)
+            if qcmd is not None:
                 # Quick commands are slash capabilities too — and type:exec
                 # ones run a shell command in the gateway process. The early
                 # gate above only fires for registry-known commands, so quick
@@ -10172,10 +10177,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 # dispatch sink unchecked. Apply the same admin/user policy to
                 # the raw typed name here so non-admins can't invoke admin-only
                 # quick commands. (#44727)
-                _denied = self._check_slash_access(source, command)
+                _denied = self._check_slash_access(source, quick_key)
                 if _denied is not None:
                     return _denied
-                qcmd = quick_commands[command]
                 if qcmd.get("type") == "exec":
                     exec_cmd = qcmd.get("command", "")
                     if exec_cmd:
@@ -10203,7 +10207,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         except Exception as e:
                             return f"Quick command error: {e}"
                     else:
-                        return f"Quick command '/{command}' has no command defined."
+                        return f"Quick command '/{quick_key}' has no command defined."
                 elif qcmd.get("type") == "alias":
                     target = (qcmd.get("target") or "").strip()
                     if target:
@@ -10214,9 +10218,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         command = target_command.split()[0] if target_command else target_command
                         # Fall through to normal command dispatch below
                     else:
-                        return f"Quick command '/{command}' has no target defined."
+                        return f"Quick command '/{quick_key}' has no target defined."
                 else:
-                    return f"Quick command '/{command}' has unsupported type (supported: 'exec', 'alias')."
+                    return f"Quick command '/{quick_key}' has unsupported type (supported: 'exec', 'alias')."
 
         # Plugin-registered slash commands
         if command:

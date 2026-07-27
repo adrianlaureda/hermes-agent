@@ -86,3 +86,51 @@ async def test_help_keeps_non_telegram_slash_command_mentions_unchanged(monkeypa
     )
 
     assert "`/Linear`" in result
+
+
+@pytest.mark.asyncio
+async def test_help_lists_configured_quick_commands(monkeypatch):
+    monkeypatch.setattr(
+        "hermes_cli.config.read_raw_config",
+        lambda: {
+            "quick_commands": {
+                "reiniciar-agentes": {
+                    "type": "exec",
+                    "command": "echo restart",
+                    "description": "Reiniciar agentes",
+                }
+            }
+        },
+    )
+    monkeypatch.setattr("agent.skill_commands.get_skill_commands", lambda: {})
+
+    result = await _make_runner()._handle_help_command(
+        _make_event("/help", Platform.TELEGRAM)
+    )
+
+    assert "User quick commands:" in result
+    assert "`/reiniciar_agentes` -- Reiniciar agentes" in result
+
+
+@pytest.mark.asyncio
+async def test_commands_lists_configured_quick_commands(monkeypatch):
+    monkeypatch.setattr(
+        "hermes_cli.config.read_raw_config",
+        lambda: {
+            "quick_commands": {
+                "reiniciar-agentes": {
+                    "type": "exec",
+                    "command": "echo restart",
+                    "description": "Reiniciar agentes",
+                }
+            }
+        },
+    )
+    monkeypatch.setattr("agent.skill_commands.get_skill_commands", lambda: {})
+
+    result = await _make_runner()._handle_commands_command(
+        _make_event("/commands 999", Platform.TELEGRAM)
+    )
+
+    assert "User quick commands:" in result
+    assert "`/reiniciar_agentes` -- Reiniciar agentes" in result

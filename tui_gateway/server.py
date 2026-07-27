@@ -8763,6 +8763,12 @@ def _notification_poller_loop(
         if evt.get("type") == "async_delegation" and not _session_owns_notification_event(
             sid, session, evt
         ):
+            from tools.async_delegation import discard_completion_delivery
+
+            # A fail-closed drop is still a terminal delivery decision. Mark
+            # it durable so the same orphan cannot be restored and retried on
+            # every backend tick or restart.
+            discard_completion_delivery(str(evt.get("delegation_id") or ""))
             logger.warning(
                 "async-delegation completion %s has no live owner "
                 "(origin=%r key=%r); dropping from injection instead of "

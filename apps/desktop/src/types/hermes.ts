@@ -553,6 +553,7 @@ export interface AnalyticsTotals {
 export interface CronJob {
   deliver?: null | string
   enabled: boolean
+  followup_message?: null | string
   id: string
   last_error?: null | string
   last_run_at?: null | string
@@ -568,6 +569,7 @@ export interface CronJob {
 
 export interface CronJobCreatePayload {
   deliver?: string
+  followup_message?: string
   name?: string
   prompt: string
   schedule: string
@@ -582,6 +584,7 @@ export interface CronJobSchedule {
 export interface CronJobUpdates {
   deliver?: string
   enabled?: boolean
+  followup_message?: string
   name?: string
   prompt?: string
   schedule?: string
