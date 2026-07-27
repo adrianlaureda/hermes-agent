@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+import json
 import os
 import random
+import tempfile
 import threading
 import time
 import uuid
@@ -113,6 +115,105 @@ SUPPORTED_POOL_STRATEGIES = {
 EXHAUSTED_TTL_401_SECONDS = 5 * 60           # 5 minutes
 EXHAUSTED_TTL_429_SECONDS = 60 * 60          # 1 hour
 EXHAUSTED_TTL_DEFAULT_SECONDS = 60 * 60      # 1 hour
+# Evita que un consumidor sin credenciales golpee el pool y el log continuamente.
+# Es deliberadamente corto para que una reautenticación externa se detecte pronto.
+EMPTY_POOL_RETRY_SECONDS = 60.0
+
+# En producción los tres gateways son procesos distintos; el backoff se
+# comparte mediante un fichero mínimo y sin secretos. Solo se activa
+# explícitamente desde los LaunchAgents para no contaminar las pruebas.
+SHARED_EMPTY_POOL_BACKOFF_ENV = "HERMES_SHARED_BACKOFF"
+SHARED_EMPTY_POOL_BACKOFF_DIR = Path.home() / ".hermes" / "state" / "credential-backoff"
+
+# ``load_pool`` crea instancias nuevas para recoger cambios de auth.json.
+# Compartir el backoff en el módulo evita que cada turno vuelva a consultar y
+# registre el mismo pool agotado desde una instancia efímera.
+_EMPTY_POOL_BACKOFF_UNTIL: Dict[str, float] = {}
+_EMPTY_POOL_BACKOFF_LOCK = threading.Lock()
+
+
+def _empty_pool_key(provider: str) -> str:
+    """Aísla el backoff entre perfiles/procesos que comparten el módulo."""
+    hermes_home = os.environ.get("HERMES_HOME", "").strip()
+    return f"{hermes_home}:{provider}"
+
+
+def _shared_empty_pool_backoff_path(provider: str) -> Optional[Path]:
+    """Devuelve el fichero de backoff interproceso, nunca con secretos."""
+    if os.environ.get(SHARED_EMPTY_POOL_BACKOFF_ENV) != "1":
+        return None
+    safe_provider = re.sub(r"[^A-Za-z0-9_.-]+", "_", provider).strip("._") or "provider"
+    return SHARED_EMPTY_POOL_BACKOFF_DIR / f"{safe_provider}.json"
+
+
+def _read_shared_empty_pool_backoff(provider: str) -> Optional[float]:
+    path = _shared_empty_pool_backoff_path(provider)
+    if path is None:
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        until = float(payload.get("until", 0.0))
+        return until if until > time.time() else None
+    except (FileNotFoundError, OSError, ValueError, TypeError, json.JSONDecodeError):
+        return None
+
+
+def _write_shared_empty_pool_backoff(provider: str, until: float) -> None:
+    path = _shared_empty_pool_backoff_path(provider)
+    if path is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+        try:
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump({"until": until}, handle, separators=(",", ":"))
+                handle.write("\n")
+            os.replace(tmp_name, path)
+        except Exception:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+            raise
+    except OSError:
+        logger.debug("no se pudo persistir el backoff compartido del pool", exc_info=True)
+
+
+def _empty_pool_backoff_active(provider: str) -> bool:
+    key = _empty_pool_key(provider)
+    with _EMPTY_POOL_BACKOFF_LOCK:
+        if time.monotonic() < _EMPTY_POOL_BACKOFF_UNTIL.get(key, 0.0):
+            return True
+        shared_until = _read_shared_empty_pool_backoff(provider)
+        if shared_until is None:
+            return False
+        _EMPTY_POOL_BACKOFF_UNTIL[key] = time.monotonic() + max(0.0, shared_until - time.time())
+        return True
+
+
+def _set_empty_pool_backoff(provider: str) -> None:
+    key = _empty_pool_key(provider)
+    until_wall = time.time() + EMPTY_POOL_RETRY_SECONDS
+    with _EMPTY_POOL_BACKOFF_LOCK:
+        _EMPTY_POOL_BACKOFF_UNTIL[key] = time.monotonic() + EMPTY_POOL_RETRY_SECONDS
+    _write_shared_empty_pool_backoff(provider, until_wall)
+
+
+def _clear_empty_pool_backoff(provider: str) -> None:
+    key = _empty_pool_key(provider)
+    with _EMPTY_POOL_BACKOFF_LOCK:
+        had_backoff = key in _EMPTY_POOL_BACKOFF_UNTIL
+        _EMPTY_POOL_BACKOFF_UNTIL.pop(key, None)
+    # El camino normal no toca disco; solo marca expirado si este proceso
+    # había observado previamente un backoff compartido.
+    if had_backoff:
+        _write_shared_empty_pool_backoff(provider, 0.0)
 
 # Pool key prefix for custom OpenAI-compatible endpoints.
 # Custom endpoints all share provider='custom' but are keyed by their
@@ -574,7 +675,14 @@ class CredentialPool:
 
     def has_available(self) -> bool:
         """True if at least one entry is not currently in exhaustion cooldown."""
-        return bool(self._available_entries())
+        if _empty_pool_backoff_active(self.provider):
+            return False
+        available = self._available_entries()
+        if not available:
+            _set_empty_pool_backoff(self.provider)
+            return False
+        _clear_empty_pool_backoff(self.provider)
+        return True
 
     def entries(self) -> List[PooledCredential]:
         return list(self._entries)
@@ -1541,11 +1649,16 @@ class CredentialPool:
         return available
 
     def _select_unlocked(self) -> Optional[PooledCredential]:
+        if _empty_pool_backoff_active(self.provider):
+            return None
         available = self._available_entries(clear_expired=True, refresh=True)
         if not available:
             self._current_id = None
+            _set_empty_pool_backoff(self.provider)
             logger.info("credential pool: no available entries (all exhausted or empty)")
             return None
+
+        _clear_empty_pool_backoff(self.provider)
 
         if self._strategy == STRATEGY_RANDOM:
             entry = random.choice(available)
@@ -1577,8 +1690,14 @@ class CredentialPool:
         current = self.current()
         if current is not None:
             return current
+        if _empty_pool_backoff_active(self.provider):
+            return None
         available = self._available_entries()
-        return available[0] if available else None
+        if not available:
+            _set_empty_pool_backoff(self.provider)
+            return None
+        _clear_empty_pool_backoff(self.provider)
+        return available[0]
 
     def mark_exhausted_and_rotate(
         self,

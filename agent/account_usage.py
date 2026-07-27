@@ -477,7 +477,13 @@ def _resolve_codex_usage_credentials(
             # Pool-only creds carry no singleton account_id; header is optional.
             logger.debug("codex ▸ /usage account_id read failed (best-effort)", exc_info=True)
         return creds["api_key"], str(creds.get("base_url", "") or "").strip(), account_id
-    except AuthError:
+    except AuthError as exc:
+        # A terminal auth-store error (for example a reused Codex refresh
+        # token) cannot be repaired by selecting another pool entry. Probing
+        # the pool here only repeats the empty/exhausted-pool log and can
+        # trigger needless refresh work; fail open until the user reauths.
+        if getattr(exc, "relogin_required", False):
+            raise
         logger.debug("codex ▸ /usage runtime resolver returned no creds; trying pool", exc_info=True)
 
     # Tier 3: direct pool select. Reached only when the resolver itself raises

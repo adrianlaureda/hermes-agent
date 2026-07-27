@@ -1577,6 +1577,28 @@ class TestRewriteTranscriptPreservesReasoning:
 
 
 class TestGatewaySessionDbRecovery:
+    def test_expiry_finalization_ends_durable_session(self, tmp_path):
+        """La expiración debe cerrar también la fila de sesión en SQLite.
+
+        El watcher podía desalojar el agente en memoria y dejar ``ended_at``
+        nulo en state.db. Esa fila stale hacía recuperable el transcript largo
+        de Telegram y volvía a pagar su contexto en los turnos siguientes.
+        """
+        store = SessionStore(sessions_dir=tmp_path, config=GatewayConfig())
+        source = SessionSource(
+            platform=Platform.TELEGRAM,
+            chat_id="chat-expiry",
+            chat_type="dm",
+            user_id="user-expiry",
+        )
+        entry = store.get_or_create_session(source)
+
+        store.set_expiry_finalized(entry)
+
+        row = store._db.get_session(entry.session_id)
+        assert row["ended_at"] is not None
+        assert row["end_reason"] == "session_expired"
+
     def test_new_session_records_gateway_peer_fields(self, tmp_path):
         store = SessionStore(sessions_dir=tmp_path, config=GatewayConfig())
         source = SessionSource(
