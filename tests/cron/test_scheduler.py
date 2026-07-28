@@ -484,6 +484,47 @@ class TestResolveDeliveryTarget:
         assert _resolve_delivery_targets({"deliver": []}) == []
 
 
+def _clear_all_home_target_envs(monkeypatch):
+    """Borra la home-channel env var de CADA plataforma que ``all`` pueda expandir.
+
+    Enumerarlas a mano se desincroniza y produce fallos que dependen del orden de
+    ejecucion: la lista original solo cubria las plataformas built-in, asi que
+    los plugins con home channel (photon, simplex, teams...) sobrevivian al
+    borrado. Como ``_iter_home_target_platforms`` llama a ``discover_plugins()``
+    -- global e idempotente --, bastaba con que otro test cargara los plugins
+    antes para que ``all`` expandiera a una plataforma de plugin y la asercion
+    reventara.
+
+    Peor: el valor que se colaba venia de la configuracion REAL del usuario, asi
+    que el fallo imprimia datos personales (un numero de telefono) en la salida
+    de pytest. En CI eso acabaria en los logs del runner.
+
+    Derivar la lista del propio codigo mantiene el test sincronizado solo.
+    """
+    from cron.scheduler import (
+        _HOME_TARGET_ENV_VARS,
+        _LEGACY_HOME_TARGET_ENV_VARS,
+    )
+
+    for var in _HOME_TARGET_ENV_VARS.values():
+        monkeypatch.delenv(var, raising=False)
+    for legacy in _LEGACY_HOME_TARGET_ENV_VARS.values():
+        monkeypatch.delenv(legacy, raising=False)
+
+    # Plataformas aportadas por plugins: mismo origen que consulta el scheduler.
+    try:
+        from hermes_cli.plugins import discover_plugins
+
+        discover_plugins()
+        from gateway.platform_registry import platform_registry
+
+        for entry in platform_registry.plugin_entries():
+            if entry.cron_deliver_env_var:
+                monkeypatch.delenv(entry.cron_deliver_env_var, raising=False)
+    except Exception:
+        pass
+
+
 class TestRoutingIntents:
     """``all`` routing intent expands at fire time."""
 
@@ -530,12 +571,7 @@ class TestRoutingIntents:
         """deliver='all' with nothing connected returns [] — delivery is recorded as failed upstream."""
         from cron.scheduler import _resolve_delivery_targets
 
-        for var in ("TELEGRAM_HOME_CHANNEL", "DISCORD_HOME_CHANNEL", "SLACK_HOME_CHANNEL",
-                    "SIGNAL_HOME_CHANNEL", "MATRIX_HOME_ROOM", "MATTERMOST_HOME_CHANNEL",
-                    "SMS_HOME_CHANNEL", "EMAIL_HOME_ADDRESS", "DINGTALK_HOME_CHANNEL",
-                    "FEISHU_HOME_CHANNEL", "WECOM_HOME_CHANNEL", "WEIXIN_HOME_CHANNEL",
-                    "BLUEBUBBLES_HOME_CHANNEL", "QQBOT_HOME_CHANNEL", "QQ_HOME_CHANNEL"):
-            monkeypatch.delenv(var, raising=False)
+        _clear_all_home_target_envs(monkeypatch)
 
         assert _resolve_delivery_targets({"deliver": "all", "origin": None}) == []
 
@@ -564,6 +600,9 @@ class TestRoutingIntents:
         """'ALL' / 'All' / 'all' are all recognized."""
         from cron.scheduler import _resolve_delivery_targets
 
+        # Parte de cero: si otro test dejo plugins registrados, su home channel
+        # se colaria en la expansion y rompiria la igualdad exacta de abajo.
+        _clear_all_home_target_envs(monkeypatch)
         monkeypatch.setenv("TELEGRAM_HOME_CHANNEL", "-111")
         monkeypatch.setenv("DISCORD_HOME_CHANNEL", "-222")
 
