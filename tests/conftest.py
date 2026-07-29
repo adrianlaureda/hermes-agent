@@ -894,3 +894,63 @@ def _live_system_guard(request, monkeypatch):
         pass
 
     yield
+
+
+# --------------------------------------------------------------------------
+# Guarda: los tests NO pueden dejar basura en los jobs.json reales.
+#
+# El 2026-07-29 la suite escribio 39 jobs reales en ~/.hermes/cron/ del perfil
+# root ('w', 'c', 't', 's', 'claim job', 'paused job'). Quedaron habilitados y
+# sin schedule valido, el scheduler los reintentaba en bucle, y cada intento
+# arrancaba un agente que moria con ImportError. Con kern.maxproc=6000 el Mac
+# acabo sin poder crear ni un shell -- sshd autenticaba pero devolvia
+# "exec request failed on channel 0" -- y hubo que reiniciarlo fisicamente.
+#
+# Se probo a forzar el almacen a un temporal, pero rompia 14 tests que montan
+# el suyo propio. Esta guarda no cambia el comportamiento de ningun test:
+# copia los ficheros al empezar y los restaura si cambian.
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _proteger_jobs_reales():
+    """Restaura los jobs.json reales si la suite los toca."""
+    import pathlib as _pl
+
+    raiz = _pl.Path.home() / ".hermes"
+    vigilados = {}
+    if raiz.is_dir():
+        candidatos = [raiz / "cron" / "jobs.json"]
+        perfiles = raiz / "profiles"
+        if perfiles.is_dir():
+            candidatos += [d / "cron" / "jobs.json" for d in perfiles.iterdir() if d.is_dir()]
+        for f in candidatos:
+            try:
+                if f.is_file():
+                    vigilados[f] = f.read_bytes()
+            except OSError:
+                pass
+
+    yield
+
+    tocados = []
+    for f, original in vigilados.items():
+        try:
+            if f.read_bytes() != original:
+                f.write_bytes(original)
+                tocados.append(str(f))
+        except OSError:
+            pass
+
+    if tocados:
+        import warnings
+
+        warnings.warn(
+            "\n"
+            "================================================================\n"
+            "  LOS TESTS ESCRIBIERON EN JOBS.JSON REALES (ya restaurados):\n"
+            + "".join(f"    {t}\n" for t in tocados)
+            + "  Usa cron.jobs.use_cron_store() para apuntar a un temporal.\n"
+            "================================================================",
+            stacklevel=1,
+        )
