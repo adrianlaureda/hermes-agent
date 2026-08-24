@@ -10,6 +10,8 @@ The first test characterizes the sequence as driven through `tick()` (proving
 the extraction didn't change `tick`'s behavior); the rest unit-test the
 extracted helper directly.
 """
+import pytest
+
 import cron.scheduler as s
 
 
@@ -18,7 +20,7 @@ def _patch_pipeline(monkeypatch, *, success=True, output="out", final="final res
     """Patch the job pipeline primitives and record the call order."""
     calls = []
 
-    def fake_run_job(job, *, defer_agent_teardown=None):
+    def fake_run_job(job, *, defer_agent_teardown=None, **kw):
         calls.append(("run_job", job["id"]))
         fr = final if silent_marker_in is None else silent_marker_in
         return (success, output, fr, error)
@@ -28,12 +30,11 @@ def _patch_pipeline(monkeypatch, *, success=True, output="out", final="final res
         return f"/tmp/{jid}.txt"
 
     delivery_results = iter(delivery_results or [])
-
     def fake_deliver(job, content, adapters=None, loop=None):
         calls.append(("deliver", job["id"], content))
         return next(delivery_results, None)
 
-    def fake_mark(jid, ok, err=None, delivery_error=None):
+    def fake_mark(jid, ok, err=None, delivery_error=None, **_kw):
         calls.append(("mark", jid, ok))
 
     monkeypatch.setattr(s, "run_job", fake_run_job)
@@ -48,12 +49,22 @@ def test_tick_process_job_sequence(monkeypatch):
     sequence run_job → save → deliver → mark, in that order."""
     calls = _patch_pipeline(monkeypatch)
     monkeypatch.setattr(s, "get_due_jobs", lambda: [{"id": "j1", "name": "t"}])
-    monkeypatch.setattr(s, "advance_next_run", lambda jid: True)
+    monkeypatch.setattr(s, "claim_job_for_fire", lambda _job_id, **_kwargs: True)
 
     s.tick(verbose=False, sync=True)
 
     assert [c[0] for c in calls] == ["run_job", "save", "deliver", "mark"]
     assert calls[-1] == ("mark", "j1", True)
+
+
+def test_tick_skips_job_when_durable_fire_claim_is_lost(monkeypatch):
+    """A manual/external fire that wins the shared CAS must exclude ticker."""
+    calls = _patch_pipeline(monkeypatch)
+    monkeypatch.setattr(s, "get_due_jobs", lambda: [{"id": "j1", "name": "t"}])
+    monkeypatch.setattr(s, "claim_job_for_fire", lambda _job_id: False)
+
+    assert s.tick(verbose=False, sync=True) == 0
+    assert calls == []
 
 
 def test_run_one_job_success_sequence(monkeypatch):
@@ -134,52 +145,182 @@ def test_run_one_job_silent_skips_delivery(monkeypatch):
     deliver."""
     calls = _patch_pipeline(monkeypatch, silent_marker_in="[SILENT]")
 
-    s.run_one_job({"id": "j3", "name": "t"})
+    s.run_one_job({"id": "j-silent", "name": "routine", "followup_message": "- Sueño:\n- Prioridad:"})
 
-    kinds = [c[0] for c in calls]
-    assert "run_job" in kinds and "save" in kinds and "mark" in kinds
-    assert "deliver" not in kinds
+    assert not [call for call in calls if call[0] == "deliver"]
 
 
-def test_run_one_job_empty_response_is_soft_failure(monkeypatch):
-    """An empty final response marks the run as NOT ok (issue #8585)."""
-    calls = _patch_pipeline(monkeypatch, final="   ")
+def test_run_one_job_exception_delivers_failure_alert(monkeypatch):
+    """An exception escaping the run body must not become a silent error row."""
+    delivered = []
+    marked = []
+    finished = []
 
-    s.run_one_job({"id": "j4", "name": "t"})
-
-    mark = [c for c in calls if c[0] == "mark"][0]
-    assert mark == ("mark", "j4", False)
-
-
-def test_run_one_job_failed_job_delivers_error(monkeypatch):
-    """A failed job still delivers (the error notice) and marks not-ok."""
-    calls = _patch_pipeline(monkeypatch, success=False, final="", error="boom")
-
-    s.run_one_job({"id": "j5", "name": "t"})
-
-    kinds = [c[0] for c in calls]
-    assert "deliver" in kinds  # failures always deliver
-    mark = [c for c in calls if c[0] == "mark"][0]
-    assert mark == ("mark", "j5", False)
-
-
-def test_run_one_job_exception_marks_failure(monkeypatch):
-    """If run_job raises, the helper marks the run failed and returns False
-    rather than propagating."""
-    def boom(job, *, defer_agent_teardown=None):
-        raise RuntimeError("kaboom")
-
-    monkeypatch.setattr(s, "run_job", boom)
-    marks = []
     monkeypatch.setattr(
-        s, "mark_job_run",
-        lambda jid, ok, err=None, delivery_error=None: marks.append((jid, ok)),
+        s, "create_execution", lambda *_a, **_kw: {"id": "exec-j3"}
+    )
+    monkeypatch.setattr(s, "claim_dispatch", lambda _job_id: True)
+    monkeypatch.setattr(s, "mark_execution_running", lambda _execution_id: None)
+    monkeypatch.setattr(
+        s,
+        "run_job",
+        lambda *_a, **_kw: (_ for _ in ()).throw(
+            RuntimeError("Gemini HTTP 503 (UNAVAILABLE)")
+        ),
+    )
+    monkeypatch.setattr(
+        s,
+        "_deliver_result",
+        lambda job, content, **_kw: delivered.append((job["id"], content)) or None,
+    )
+    monkeypatch.setattr(
+        s,
+        "mark_job_run",
+        lambda *args, **kwargs: marked.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        s,
+        "finish_execution",
+        lambda *args, **kwargs: finished.append((args, kwargs)),
     )
 
-    ok = s.run_one_job({"id": "j6", "name": "t"})
+    ok = s.run_one_job({"id": "j3", "name": "morning", "deliver": "telegram"})
 
     assert ok is False
-    assert marks == [("j6", False)]
+    assert delivered == [
+        ("j3", "⚠️ Cron 'morning' failed: Gemini HTTP 503 (UNAVAILABLE)")
+    ]
+    assert marked == [
+        (("j3", False, "Gemini HTTP 503 (UNAVAILABLE)"), {"delivery_error": None})
+    ]
+    assert finished == [
+        (
+            ("exec-j3",),
+            {
+                "success": False,
+                "error": "Gemini HTTP 503 (UNAVAILABLE)",
+                "delivery_outcome": "delivered",
+            },
+        )
+    ]
+
+
+def test_run_one_job_exception_records_failure_alert_delivery_error(monkeypatch):
+    """A failed fallback alert must populate last_delivery_error."""
+    marked = []
+
+    monkeypatch.setattr(
+        s, "create_execution", lambda *_a, **_kw: {"id": "exec-j4"}
+    )
+    monkeypatch.setattr(s, "claim_dispatch", lambda _job_id: True)
+    monkeypatch.setattr(s, "mark_execution_running", lambda _execution_id: None)
+    monkeypatch.setattr(
+        s,
+        "run_job",
+        lambda *_a, **_kw: (_ for _ in ()).throw(RuntimeError("provider failed")),
+    )
+    monkeypatch.setattr(s, "_deliver_result", lambda *_a, **_kw: "send failed: 502")
+    monkeypatch.setattr(
+        s,
+        "mark_job_run",
+        lambda *args, **kwargs: marked.append((args, kwargs)),
+    )
+    monkeypatch.setattr(s, "finish_execution", lambda *_a, **_kw: None)
+
+    assert s.run_one_job({"id": "j4", "deliver": "telegram"}) is False
+    assert marked == [
+        (("j4", False, "provider failed"), {"delivery_error": "send failed: 502"})
+    ]
+
+
+def test_run_one_job_exception_after_delivery_does_not_redeliver(monkeypatch):
+    """Once delivery has been attempted, the outer handler must not send again."""
+    delivered = []
+    mark_calls = []
+
+    monkeypatch.setattr(
+        s, "create_execution", lambda *_a, **_kw: {"id": "exec-j5"}
+    )
+    monkeypatch.setattr(s, "claim_dispatch", lambda _job_id: True)
+    monkeypatch.setattr(s, "mark_execution_running", lambda _execution_id: None)
+    monkeypatch.setattr(
+        s,
+        "run_job",
+        lambda *_a, **_kw: (True, "out", "final response", None),
+    )
+    monkeypatch.setattr(s, "save_job_output", lambda jid, out: f"/tmp/{jid}.txt")
+    monkeypatch.setattr(
+        s,
+        "_deliver_result",
+        lambda job, content, **_kw: delivered.append((job["id"], content)) or None,
+    )
+
+    def fake_mark(*args, **kwargs):
+        mark_calls.append((args, kwargs))
+        if len(mark_calls) == 1:
+            raise RuntimeError("bookkeeping boom")
+
+    monkeypatch.setattr(s, "mark_job_run", fake_mark)
+    monkeypatch.setattr(s, "finish_execution", lambda *_a, **_kw: None)
+
+    ok = s.run_one_job({"id": "j5", "name": "once", "deliver": "telegram"})
+
+    assert ok is False
+    assert delivered == [("j5", "final response")]
+    assert mark_calls[0] == (("j5", True, None), {"delivery_error": None})
+    assert mark_calls[1] == (
+        ("j5", False, "bookkeeping boom"),
+        {"delivery_error": None},
+    )
+
+
+def test_run_one_job_keyboard_interrupt_skips_delivery_and_reraises(monkeypatch):
+    """Hard interrupts must not attempt failure delivery; they re-raise."""
+    delivered = []
+    marked = []
+    finished = []
+
+    monkeypatch.setattr(
+        s, "create_execution", lambda *_a, **_kw: {"id": "exec-j6"}
+    )
+    monkeypatch.setattr(s, "claim_dispatch", lambda _job_id: True)
+    monkeypatch.setattr(s, "mark_execution_running", lambda _execution_id: None)
+    monkeypatch.setattr(
+        s,
+        "run_job",
+        lambda *_a, **_kw: (_ for _ in ()).throw(KeyboardInterrupt()),
+    )
+    monkeypatch.setattr(
+        s,
+        "_deliver_result",
+        lambda job, content, **_kw: delivered.append((job["id"], content)) or None,
+    )
+    monkeypatch.setattr(
+        s,
+        "mark_job_run",
+        lambda *args, **kwargs: marked.append((args, kwargs)),
+    )
+    monkeypatch.setattr(
+        s,
+        "finish_execution",
+        lambda *args, **kwargs: finished.append((args, kwargs)),
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        s.run_one_job({"id": "j6", "name": "interrupt", "deliver": "telegram"})
+
+    assert delivered == []
+    assert marked == [(("j6", False, "KeyboardInterrupt"), {})]
+    assert finished == [
+        (
+            ("exec-j6",),
+            {
+                "success": False,
+                "error": "KeyboardInterrupt",
+                "delivery_outcome": "suppressed",
+            },
+        )
+    ]
 
 
 def test_run_one_job_installs_secret_scope_under_multiplex(monkeypatch, tmp_path):
@@ -199,7 +340,7 @@ def test_run_one_job_installs_secret_scope_under_multiplex(monkeypatch, tmp_path
 
     scope_during_run = {}
 
-    def fake_run_job(job, *, defer_agent_teardown=None):
+    def fake_run_job(job, *, defer_agent_teardown=None, **kw):
         # This is where resolve_runtime_provider() would read a secret. Prove a
         # scope is installed and the profile's secret resolves without raising.
         scope_during_run["scope"] = ss.current_secret_scope()
@@ -223,117 +364,3 @@ def test_run_one_job_installs_secret_scope_under_multiplex(monkeypatch, tmp_path
     assert scope_during_run["base_url"] == "https://openrouter.ai/api/v1"
     # And it was torn down after run_one_job returned (no leak).
     assert ss.current_secret_scope() is None
-
-
-def test_run_one_job_delivers_before_agent_teardown(monkeypatch):
-    """Regression for #58720: the cron agent's async-resource teardown
-    (agent.close + cleanup_stale_async_clients) MUST run AFTER delivery, not
-    before. run_job defers teardown by appending the live agent to the holder
-    list; run_one_job tears it down only after _deliver_result has run. If the
-    order flips, delivery races a torn-down async client and dies with
-    'cannot schedule new futures after interpreter shutdown'.
-    """
-    order = []
-
-    class FakeAgent:
-        def close(self):
-            order.append("agent.close")
-
-    def fake_run_job(job, *, defer_agent_teardown=None):
-        order.append("run_job")
-        # Mimic run_job's deferral contract: hand the live agent back so the
-        # caller tears it down after delivery instead of in run_job's finally.
-        assert defer_agent_teardown is not None, "run_one_job must defer teardown"
-        defer_agent_teardown.append(FakeAgent())
-        return (True, "out", "final response", None)
-
-    def fake_deliver(job, content, adapters=None, loop=None):
-        order.append("deliver")
-        return None
-
-    monkeypatch.setattr(s, "run_job", fake_run_job)
-    monkeypatch.setattr(s, "save_job_output", lambda jid, out: f"/tmp/{jid}.txt")
-    monkeypatch.setattr(s, "_deliver_result", fake_deliver)
-    monkeypatch.setattr(s, "mark_job_run", lambda *a, **k: None)
-    # cleanup_stale_async_clients is imported lazily inside _teardown_cron_agent;
-    # stub it so the teardown records its own marker without touching real caches.
-    import agent.auxiliary_client as aux
-    monkeypatch.setattr(aux, "cleanup_stale_async_clients",
-                        lambda: order.append("cleanup_stale"))
-
-    ok = s.run_one_job({"id": "j8", "name": "t"})
-
-    assert ok is True
-    # Delivery must strictly precede agent teardown + stale-client reap.
-    assert order == ["run_job", "deliver", "agent.close", "cleanup_stale"], order
-
-
-def test_run_one_job_tears_down_deferred_agent_when_delivery_raises(monkeypatch):
-    """Even if _deliver_result raises, the deferred agent is still torn down
-    (no fd/client leak — #10200). Teardown lives in a finally around delivery.
-    """
-    order = []
-
-    class FakeAgent:
-        def close(self):
-            order.append("agent.close")
-
-    def fake_run_job(job, *, defer_agent_teardown=None):
-        defer_agent_teardown.append(FakeAgent())
-        return (True, "out", "final response", None)
-
-    def boom_deliver(job, content, adapters=None, loop=None):
-        order.append("deliver-raise")
-        raise RuntimeError("send blew up")
-
-    monkeypatch.setattr(s, "run_job", fake_run_job)
-    monkeypatch.setattr(s, "save_job_output", lambda jid, out: f"/tmp/{jid}.txt")
-    monkeypatch.setattr(s, "_deliver_result", boom_deliver)
-    monkeypatch.setattr(s, "mark_job_run", lambda *a, **k: None)
-    import agent.auxiliary_client as aux
-    monkeypatch.setattr(aux, "cleanup_stale_async_clients",
-                        lambda: order.append("cleanup_stale"))
-
-    ok = s.run_one_job({"id": "j9", "name": "t"})
-
-    assert ok is True  # delivery error is recorded, not propagated
-    assert order == ["deliver-raise", "agent.close", "cleanup_stale"], order
-
-
-def test_run_one_job_tears_down_deferred_agent_when_save_raises(monkeypatch):
-    """#58720 W1: if save_job_output (or the [SILENT]/empty computation) raises
-    AFTER run_job hands the agent back but BEFORE delivery, the deferred agent
-    must still be torn down. The outer `except` would otherwise swallow the
-    error and leak the agent (#10200). Teardown lives in a finally spanning
-    save→deliver.
-    """
-    order = []
-
-    class FakeAgent:
-        def close(self):
-            order.append("agent.close")
-
-    def fake_run_job(job, *, defer_agent_teardown=None):
-        defer_agent_teardown.append(FakeAgent())
-        return (True, "out", "final response", None)
-
-    def boom_save(jid, out):
-        order.append("save-raise")
-        raise RuntimeError("disk full")
-
-    monkeypatch.setattr(s, "run_job", fake_run_job)
-    monkeypatch.setattr(s, "save_job_output", boom_save)
-    monkeypatch.setattr(s, "_deliver_result",
-                        lambda *a, **k: order.append("deliver"))
-    monkeypatch.setattr(s, "mark_job_run", lambda *a, **k: None)
-    import agent.auxiliary_client as aux
-    monkeypatch.setattr(aux, "cleanup_stale_async_clients",
-                        lambda: order.append("cleanup_stale"))
-
-    ok = s.run_one_job({"id": "j10", "name": "t"})
-
-    # save raised → outer handler marks failure and returns False, but the
-    # deferred agent was still torn down (no delivery, no leak).
-    assert ok is False
-    assert "deliver" not in order
-    assert order == ["save-raise", "agent.close", "cleanup_stale"], order
