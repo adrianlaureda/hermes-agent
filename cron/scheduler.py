@@ -6356,6 +6356,30 @@ def _run_one_job_body(
                         raise
                     delivery_error = str(de)
                     logger.error("Delivery failed for job %s: %s", job["id"], de)
+                # El follow-up forma parte de una entrega compuesta: solo se
+                # intenta tras una respuesta y entrega principal exitosas.
+                # Los fallos del agente conservan su único aviso histórico.
+                followup_message = job.get("followup_message")
+                if (
+                    success
+                    and delivery_error is None
+                    and isinstance(followup_message, str)
+                    and followup_message.strip()
+                ):
+                    try:
+                        delivery_error = _deliver_result(
+                            job,
+                            followup_message.strip(),
+                            adapters=adapters,
+                            loop=loop,
+                        )
+                    except Exception as de:
+                        delivery_error = str(de)
+                        logger.error(
+                            "Follow-up delivery failed for job %s: %s",
+                            job["id"],
+                            de,
+                        )
         except _FireClaimLostDuringSideEffect:
             side_effect_ownership_lost = True
         finally:
