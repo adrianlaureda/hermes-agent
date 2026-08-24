@@ -30,7 +30,6 @@ def _patch_pipeline(monkeypatch, *, success=True, output="out", final="final res
         return f"/tmp/{jid}.txt"
 
     delivery_results = iter(delivery_results or [])
-
     def fake_deliver(job, content, adapters=None, loop=None):
         calls.append(("deliver", job["id"], content))
         return next(delivery_results, None)
@@ -365,4 +364,3 @@ def test_run_one_job_installs_secret_scope_under_multiplex(monkeypatch, tmp_path
     assert scope_during_run["base_url"] == "https://openrouter.ai/api/v1"
     # And it was torn down after run_one_job returned (no leak).
     assert ss.current_secret_scope() is None
-

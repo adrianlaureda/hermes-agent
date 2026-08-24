@@ -441,12 +441,25 @@ def _resolve_cron_enabled_toolsets(job: dict, cfg: dict) -> list[str] | None:
     get cron WITHOUT ``moa`` by default (issue reported by Norbert —
     surprise $4.63 run).
     """
+    strip_mcp = False
     per_job = job.get("enabled_toolsets")
     if per_job:
-        return _merge_mcp_into_per_job_toolsets(list(per_job), cfg or {})
+        merged = _merge_mcp_into_per_job_toolsets(list(per_job), cfg or {})
+        if merged:
+            return merged
+        # Solo el centinela ``no_mcp``: el usuario pidio "sin MCP", no "sin
+        # herramientas". Un allowlist vacio deja al agente con CERO tools y
+        # la peticion sale sin clave ``tools``, asi que el modelo no puede
+        # emitir tool calls y el job queda mudo. Caemos al fallback de
+        # plataforma restando los servidores MCP.
+        strip_mcp = True
     try:
         from hermes_cli.tools_config import _get_platform_tools  # lazy: avoid heavy import at cron module load
-        return sorted(_get_platform_tools(cfg or {}, "cron"))
+        platform = set(_get_platform_tools(cfg or {}, "cron"))
+        if strip_mcp:
+            from hermes_cli.tools_config import enabled_mcp_server_names
+            platform -= enabled_mcp_server_names(cfg or {})
+        return sorted(platform)
     except Exception as exc:
         logger.warning(
             "Cron toolset resolution failed, falling back to full default toolset: %s",

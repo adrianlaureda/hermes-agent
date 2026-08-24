@@ -4,10 +4,86 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import time
 from datetime import datetime, timezone
 
 import pytest
+
+
+def test_empty_pool_selection_uses_backoff_and_rate_limits(caplog, monkeypatch):
+    """Un pool vacío no debe reintentar ni registrar un aviso cada 15 s."""
+    import agent.credential_pool as credential_pool
+    from agent.credential_pool import CredentialPool
+
+    monkeypatch.setattr(credential_pool, "_EMPTY_POOL_BACKOFF_UNTIL", {})
+
+    pool = CredentialPool("openai-codex", [])
+    calls = 0
+
+    def empty_entries(**_kwargs):
+        nonlocal calls
+        calls += 1
+        return []
+
+    monkeypatch.setattr(pool, "_available_entries", empty_entries)
+    with caplog.at_level(logging.INFO, logger="agent.credential_pool"):
+        assert pool.select() is None
+        assert pool.select() is None
+        assert pool.has_available() is False
+
+    assert calls == 1
+    messages = [
+        record.getMessage()
+        for record in caplog.records
+        if "no available entries" in record.getMessage()
+    ]
+    assert messages == ["credential pool: no available entries (all exhausted or empty)"]
+
+
+def test_empty_pool_backoff_is_shared_across_pool_instances(monkeypatch):
+    """Las instancias efímeras del runtime comparten el backoff por proveedor."""
+    import agent.credential_pool as credential_pool
+    from agent.credential_pool import CredentialPool
+
+    monkeypatch.setattr(credential_pool, "_EMPTY_POOL_BACKOFF_UNTIL", {})
+
+    first = CredentialPool("openai-codex", [])
+    second = CredentialPool("openai-codex", [])
+    calls = [0, 0]
+
+    def first_empty(**_kwargs):
+        calls[0] += 1
+        return []
+
+    def second_empty(**_kwargs):
+        calls[1] += 1
+        return []
+
+    monkeypatch.setattr(first, "_available_entries", first_empty)
+    monkeypatch.setattr(second, "_available_entries", second_empty)
+    assert first.select() is None
+    assert second.select() is None
+    assert calls == [1, 0]
+
+
+def test_empty_pool_backoff_is_shared_between_processes(tmp_path, monkeypatch):
+    """El backoff persistido evita que tres gateways repitan el mismo intento."""
+    import agent.credential_pool as credential_pool
+
+    monkeypatch.setenv("HERMES_SHARED_BACKOFF", "1")
+    monkeypatch.setattr(credential_pool, "SHARED_EMPTY_POOL_BACKOFF_DIR", tmp_path)
+    monkeypatch.setattr(credential_pool, "_EMPTY_POOL_BACKOFF_UNTIL", {})
+
+    credential_pool._set_empty_pool_backoff("openai-codex")
+    assert credential_pool._read_shared_empty_pool_backoff("openai-codex") is not None
+
+    # Simula un proceso nuevo: no comparte el diccionario en memoria.
+    monkeypatch.setattr(credential_pool, "_EMPTY_POOL_BACKOFF_UNTIL", {})
+    assert credential_pool._empty_pool_backoff_active("openai-codex") is True
+
+    credential_pool._clear_empty_pool_backoff("openai-codex")
+    assert credential_pool._read_shared_empty_pool_backoff("openai-codex") is None
 
 
 def _write_auth_store(tmp_path, payload: dict) -> None:
