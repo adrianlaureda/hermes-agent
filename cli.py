@@ -11833,7 +11833,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                         except Exception as e:
                             self._console_print(f"[bold red]Quick command error: {e}[/]")
                     else:
-                        self._console_print(f"[bold red]Quick command '{quick_key}' has no command defined[/]")
+                        self._console_print(f"[bold red]Quick command '{base_cmd}' has no command defined[/]")
                 elif qcmd.get("type") == "alias":
                     target = qcmd.get("target", "").strip()
                     if target:

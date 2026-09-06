@@ -2109,6 +2109,7 @@ def update_job(job_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]
                     _mv = updates[_mon_field]
                     _mv = str(_mv).strip() if isinstance(_mv, str) else None
                     updates[_mon_field] = _mv or None
+
             if "followup_message" in updates:
                 updates["followup_message"] = _normalize_job_optional_text(
                     updates["followup_message"]

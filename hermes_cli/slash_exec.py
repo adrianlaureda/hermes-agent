@@ -143,7 +143,7 @@ def _exec_bundles(ctx: CommandContext) -> CommandReply:
 def _exec_help(ctx: CommandContext) -> CommandReply:
     """Core gateway /help body (pre platform mention decoration)."""
     from agent.i18n import t
-    from hermes_cli.commands import gateway_help_lines
+    from hermes_cli.commands import gateway_help_lines, quick_command_help_lines
 
     lines = [
         t("gateway.help.header"),
@@ -162,6 +162,9 @@ def _exec_help(ctx: CommandContext) -> CommandReply:
                 lines.append(t("gateway.help.more_use_commands", count=len(sorted_cmds) - 10))
     except Exception:
         pass
+    quick_lines = quick_command_help_lines()
+    if quick_lines:
+        lines.extend(["", *quick_lines])
     return CommandReply("\n".join(lines), format="markdown")
 
 
@@ -172,7 +175,7 @@ def _exec_commands(ctx: CommandContext) -> CommandReply:
     everything else 20) — for a fixed context the text is surface-invariant.
     """
     from agent.i18n import t
-    from hermes_cli.commands import gateway_help_lines
+    from hermes_cli.commands import gateway_help_lines, quick_command_help_lines
 
     raw_args = (ctx.args or "").strip()
     if raw_args:
@@ -196,6 +199,9 @@ def _exec_commands(ctx: CommandContext) -> CommandReply:
                 entries.append(f"`{cmd}` — {desc}")
     except Exception:
         pass
+    quick_lines = quick_command_help_lines()
+    if quick_lines:
+        entries.extend(["", *quick_lines])
 
     if not entries:
         return CommandReply(t("gateway.commands.none"), format="markdown")
