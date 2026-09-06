@@ -152,7 +152,7 @@ def test_node_dependency_success_remains_successful(tmp_path: Path) -> None:
     }
     assert calls == [str(install_dir), str(install_dir / "ui-tui")]
     assert args == [
-        "install --workspace ui-tui --workspace web --include-workspace-root --silent",
+        "install --workspace ui-tui --workspace web --include-workspace-root --loglevel=error",
         "install --silent",
     ]
     assert "Node.js dependencies installed" in proc.stdout
