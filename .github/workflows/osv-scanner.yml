@@ -45,6 +45,7 @@ jobs:
       # Scan explicit lockfiles rather than recursing, so we only look at
       # the five sources of truth and skip vendored / test / worktree dirs.
       scan-args: |-
+        --config=osv-scanner.toml
         --lockfile=uv.lock
         --lockfile=package-lock.json
         --lockfile=website/package-lock.json

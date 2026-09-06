@@ -1,0 +1,19 @@
+# Excepciones temporales para Electron 40.10.2. Subir a Electron 40.10.3 o
+# posterior cambia el instalador a un extractor nativo que falla en equipos
+# Windows con Smart App Control. Cada excepción caduca para obligar a revisar
+# de nuevo la compatibilidad del instalador.
+
+[[IgnoredVulns]]
+id = "CVE-2026-70608"
+ignoreUntil = 2026-12-01
+reason = "Hermes deniega toda ventana nueva con setWindowOpenHandler; el aviso excluye expresamente esta configuración."
+
+[[IgnoredVulns]]
+id = "CVE-2026-70606"
+ignoreUntil = 2026-12-01
+reason = "El protocolo de Hermes devuelve Response y no usa ProtocolResponse.url ni cachés entre sesiones."
+
+[[IgnoredVulns]]
+id = "CVE-2026-56876"
+ignoreUntil = 2026-12-01
+reason = "extract-zip solo procesa el archivo oficial de Electron, descargado por @electron/get y verificado con SHASUM256."
