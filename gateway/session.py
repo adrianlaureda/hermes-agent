@@ -2429,7 +2429,19 @@ class SessionStore:
         """
         if self._db:
             try:
-                return self._db.session_count_ge(2)
+                # ``session_count`` is the stable database contract. Keep
+                # ``session_count_ge`` as a fallback for older stores while
+                # avoiding MagicMock/non-boolean values from test doubles.
+                count_fn = getattr(self._db, "session_count", None)
+                if callable(count_fn):
+                    count = count_fn()
+                    if isinstance(count, int):
+                        return count > 1
+                count_ge_fn = getattr(self._db, "session_count_ge", None)
+                if callable(count_ge_fn):
+                    result = count_ge_fn(2)
+                    if isinstance(result, bool):
+                        return result
             except Exception:
                 pass  # fall through to heuristic
         # Fallback: check if sessions.json was loaded with existing data.

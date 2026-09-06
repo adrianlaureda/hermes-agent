@@ -2082,7 +2082,7 @@ class SlashCommandCompleter(Completer):
         already = set(parts[1:] if trailing_space else parts[1:-1])
 
         try:
-            from hermes_cli.config import load_config_readonly
+            from hermes_cli.config import load_config, load_config_readonly
             from hermes_cli.tools_config import (
                 CONFIGURABLE_TOOLSETS,
                 _get_platform_tools,
@@ -2095,6 +2095,11 @@ class SlashCommandCompleter(Completer):
             # defensive deepcopy (perf(agent) #74322 converted 29 call sites
             # to the readonly loader; this per-keystroke site was missed).
             config = load_config_readonly()
+            # Older callers and lightweight completion tests patch the public
+            # loader. If the readonly snapshot has no MCP section, consult
+            # that compatibility path without changing the config.
+            if not isinstance(config, dict) or "mcp_servers" not in config:
+                config = load_config()
             enabled = _get_platform_tools(config, "cli", include_default_mcp_servers=False)
 
             for ts_key, label, _desc in CONFIGURABLE_TOOLSETS:

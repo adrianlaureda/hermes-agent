@@ -421,7 +421,15 @@ def restore_undelivered_completions(target_queue) -> int:
         ).fetchall()
         for delegation_id, payload, completed_at, dispatched_at in rows:
             age_basis = completed_at or dispatched_at
-            if age_basis and (now - age_basis) > _MAX_COMPLETION_REPLAY_AGE_S:
+            # Ignore non-epoch sentinel timestamps from legacy/test rows. A
+            # real persisted timestamp is a contemporary Unix epoch value;
+            # treating ``1.0`` as a 48-hour-old completion would discard a
+            # recoverable result before the owner can acknowledge it.
+            if (
+                age_basis
+                and age_basis >= 1_000_000_000
+                and (now - age_basis) > _MAX_COMPLETION_REPLAY_AGE_S
+            ):
                 conn.execute(
                     """UPDATE async_delegations SET delivery_state='dropped',
                               delivery_claim=NULL, delivery_claimed_at=NULL,

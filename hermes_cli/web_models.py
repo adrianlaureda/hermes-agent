@@ -388,6 +388,7 @@ class CronJobCreate(BaseModel):
     enabled_toolsets: Optional[List[str]] = None
     workdir: Optional[str] = None
     no_agent: bool = False
+    followup_message: Optional[str] = None
 
 
 class CronJobUpdate(BaseModel):
@@ -738,4 +739,3 @@ class _PluginProvidersPutBody(BaseModel):
 
 class _PluginVisibilityBody(BaseModel):
     hidden: bool
-

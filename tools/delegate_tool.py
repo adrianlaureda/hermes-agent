@@ -3419,7 +3419,9 @@ _TEMPLATE_MARKER_RE = re.compile(
 _MIN_BATCH_GOAL_LEN = 10
 
 
-def _validate_batch_tasks(task_list: List[Dict[str, Any]]) -> Optional[str]:
+def _validate_batch_tasks(
+    task_list: List[Dict[str, Any]], *, allow_short_goals: bool = False
+) -> Optional[str]:
     """Validate a tasks=[...] batch beyond per-task goal presence.
 
     Returns an actionable error string, or None when the batch is valid.
@@ -3455,7 +3457,10 @@ def _validate_batch_tasks(task_list: List[Dict[str, Any]]) -> Optional[str]:
                 "calling delegate_task — subagents cannot resolve "
                 "placeholders."
             )
-        if len(goal) < _MIN_BATCH_GOAL_LEN:
+        # Background callers may use terse labels because the dispatch
+        # envelope already carries the parent context. Keep the strict
+        # descriptive-length guard for synchronous fan-out validation.
+        if not allow_short_goals and len(goal) < _MIN_BATCH_GOAL_LEN:
             return (
                 f"Task {i} goal is too short ({goal!r}). Write a specific, "
                 "self-contained goal of at least "
@@ -3626,7 +3631,9 @@ def delegate_task(
     # short goals are valid there.  Duplicate goals are allowed (best-of-N).
     # Inspired by: MoonshotAI/kimi-code agent-swarm.md validation rules (MIT).
     if tasks is not None and isinstance(tasks, list):
-        batch_error = _validate_batch_tasks(task_list)
+        batch_error = _validate_batch_tasks(
+            task_list, allow_short_goals=background
+        )
         if batch_error:
             return tool_error(batch_error)
 
