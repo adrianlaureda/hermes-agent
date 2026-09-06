@@ -112,6 +112,15 @@ collect_sandbox_logs() {
     cat "$dest/proxy.log" >&2
     echo "--- end proxy.log ---" >&2
   fi
+
+  # npm sometimes reduces a registry/filesystem failure to the generic
+  # "Exit handler never called" message. Preserve its debug log before the
+  # disposable sandbox is removed so the real preceding error is auditable.
+  local npm_src="$SANDBOX_ROOT/home/.npm/_logs"
+  if [ -d "$npm_src" ]; then
+    mkdir -p "$dest/npm"
+    cp -a "$npm_src/." "$dest/npm/" 2>/dev/null || true
+  fi
 }
 
 # ── preflight ──────────────────────────────────────────────────────────────

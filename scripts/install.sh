@@ -2305,6 +2305,23 @@ configure_browser_env_from_system_browser() {
     log_success "Configured browser tools to use $browser_path"
 }
 
+# Selecciona en NODE_DEPS_WORKSPACE_ARGS solo los workspaces que necesita una
+# instalación CLI. Un `npm install` sin acotar también resuelve `apps/*` y
+# materializa apps/desktop; eso intenta compilar node-pty aunque este equipo no
+# vaya a ejecutar el escritorio. Las dependencias desktop se instalan aparte,
+# únicamente con --include-desktop.
+node_deps_workspace_args() {
+    local install_dir="$1"
+    NODE_DEPS_WORKSPACE_ARGS=()
+    [ -f "$install_dir/ui-tui/package.json" ] && NODE_DEPS_WORKSPACE_ARGS+=(--workspace ui-tui)
+    [ -f "$install_dir/web/package.json" ] && NODE_DEPS_WORKSPACE_ARGS+=(--workspace web)
+    if [ "${#NODE_DEPS_WORKSPACE_ARGS[@]}" -eq 0 ]; then
+        NODE_DEPS_WORKSPACE_ARGS=(--workspaces=false)
+        return 0
+    fi
+    NODE_DEPS_WORKSPACE_ARGS+=(--include-workspace-root)
+}
+
 install_node_deps() {
     if [ "$HAS_NODE" = false ]; then
         log_info "Skipping Node.js dependencies (Node not installed)"
@@ -2327,11 +2344,15 @@ install_node_deps() {
         # installed", hiding the degradation from the user (#77003). Now it
         # fails the install outright instead of burying the warning (#85297).
         # Capture npm output so failures are diagnosable (#87340).
+        node_deps_workspace_args "$INSTALL_DIR"
         local npm_log
         npm_log="$(mktemp)"
-        if ! run_with_timeout "$NODE_DEPS_TIMEOUT" npm install --silent \
+        # Use the committed lockfile as the authority and rebuild node_modules.
+        # `npm install` mutates an existing tree in place and can fail with
+        # ENOTEMPTY after an interrupted/older installer leaves rename debris.
+        if ! run_with_timeout "$NODE_DEPS_TIMEOUT" npm ci "${NODE_DEPS_WORKSPACE_ARGS[@]}" --loglevel=error \
                 >"$npm_log" 2>&1; then
-            log_error "npm install failed or timed out; Node.js dependencies were not installed"
+            log_error "npm ci failed or timed out; Node.js dependencies were not installed"
             if [ -s "$npm_log" ]; then
                 log_error "npm output:"
                 cat "$npm_log" >&2

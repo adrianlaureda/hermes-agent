@@ -21,15 +21,19 @@ def _run_node_deps_stage(
     tmp_path: Path,
     *,
     fail_directory: str | None,
-) -> tuple[subprocess.CompletedProcess[str], Path, list[str]]:
+    stale_root_node_modules: bool = False,
+) -> tuple[subprocess.CompletedProcess[str], Path, list[str], list[str]]:
     install_dir = tmp_path / "install"
     tui_dir = install_dir / "ui-tui"
+    web_dir = install_dir / "web"
     bin_dir = tmp_path / "bin"
     hermes_home = tmp_path / "home"
     managed_bin = hermes_home / "bin"
     npm_calls = tmp_path / "npm-calls"
+    npm_args = tmp_path / "npm-args"
 
     tui_dir.mkdir(parents=True)
+    web_dir.mkdir()
     bin_dir.mkdir()
     managed_bin.mkdir(parents=True)
     (install_dir / "package.json").write_text(
@@ -40,6 +44,14 @@ def _run_node_deps_stage(
         '{"name":"tui-regression-probe","private":true}\n',
         encoding="utf-8",
     )
+    (web_dir / "package.json").write_text(
+        '{"name":"web-regression-probe","private":true}\n',
+        encoding="utf-8",
+    )
+    if stale_root_node_modules:
+        stale_dir = install_dir / "node_modules" / ".eslint-stale"
+        stale_dir.mkdir(parents=True)
+        (stale_dir / "partial-install").write_text("stale\n", encoding="utf-8")
     _write_executable(bin_dir / "node", "#!/bin/sh\necho v26.0.0\n")
     _write_executable(
         bin_dir / "npm",
@@ -49,6 +61,18 @@ if [ "${1:-}" = "--version" ]; then
     exit 0
 fi
 printf '%s\\n' "$PWD" >> "$NPM_CALLS"
+printf '%s\\n' "$*" >> "$NPM_ARGS"
+if [ -n "${NPM_REJECT_STALE_INSTALL:-}" ] && [ "$PWD" = "$NPM_REJECT_STALE_INSTALL" ]; then
+    case "${1:-}" in
+        install)
+            echo "npm error ENOTEMPTY: stale dependency tree" >&2
+            exit 39
+            ;;
+        ci)
+            rm -rf "$PWD/node_modules"
+            ;;
+    esac
+fi
 if [ -n "${NPM_FAIL_DIRECTORY:-}" ] && [ "$PWD" = "$NPM_FAIL_DIRECTORY" ]; then
     echo "simulated npm lifecycle failure" >&2
     exit 37
@@ -64,7 +88,9 @@ exit 0
             "HERMES_HOME": str(hermes_home),
             "HERMES_INSTALL_DIR": str(install_dir),
             "NPM_CALLS": str(npm_calls),
+            "NPM_ARGS": str(npm_args),
             "NPM_FAIL_DIRECTORY": fail_directory or "",
+            "NPM_REJECT_STALE_INSTALL": str(install_dir) if stale_root_node_modules else "",
             "PATH": f"{bin_dir}:{env['PATH']}",
         }
     )
@@ -85,7 +111,8 @@ exit 0
         check=False,
     )
     calls = npm_calls.read_text(encoding="utf-8").splitlines()
-    return proc, install_dir, calls
+    args = npm_args.read_text(encoding="utf-8").splitlines()
+    return proc, install_dir, calls, args
 
 
 def _stage_result(proc: subprocess.CompletedProcess[str]) -> dict[str, object]:
@@ -94,7 +121,7 @@ def _stage_result(proc: subprocess.CompletedProcess[str]) -> dict[str, object]:
 
 def test_root_node_dependency_failure_is_fatal(tmp_path: Path) -> None:
     install_dir = tmp_path / "install"
-    proc, actual_install_dir, calls = _run_node_deps_stage(
+    proc, actual_install_dir, calls, _ = _run_node_deps_stage(
         tmp_path,
         fail_directory=str(install_dir),
     )
@@ -116,7 +143,7 @@ def test_root_node_dependency_failure_is_fatal(tmp_path: Path) -> None:
 def test_tui_node_dependency_failure_is_fatal(tmp_path: Path) -> None:
     install_dir = tmp_path / "install"
     tui_dir = install_dir / "ui-tui"
-    proc, _, calls = _run_node_deps_stage(
+    proc, _, calls, _ = _run_node_deps_stage(
         tmp_path,
         fail_directory=str(tui_dir),
     )
@@ -129,7 +156,7 @@ def test_tui_node_dependency_failure_is_fatal(tmp_path: Path) -> None:
 
 
 def test_node_dependency_success_remains_successful(tmp_path: Path) -> None:
-    proc, install_dir, calls = _run_node_deps_stage(
+    proc, install_dir, calls, args = _run_node_deps_stage(
         tmp_path,
         fail_directory=None,
     )
@@ -141,5 +168,23 @@ def test_node_dependency_success_remains_successful(tmp_path: Path) -> None:
         "skipped": False,
     }
     assert calls == [str(install_dir), str(install_dir / "ui-tui")]
+    assert args == [
+        "ci --workspace ui-tui --workspace web --include-workspace-root --loglevel=error",
+        "install --silent",
+    ]
     assert "Node.js dependencies installed" in proc.stdout
     assert "TUI dependencies installed" in proc.stdout
+
+
+def test_root_node_dependencies_replace_stale_partial_tree(tmp_path: Path) -> None:
+    """An update must recover from node_modules left by an interrupted install."""
+    proc, install_dir, calls, args = _run_node_deps_stage(
+        tmp_path,
+        fail_directory=None,
+        stale_root_node_modules=True,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert calls == [str(install_dir), str(install_dir / "ui-tui")]
+    assert args[0].startswith("ci ")
+    assert not (install_dir / "node_modules" / ".eslint-stale").exists()

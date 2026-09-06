@@ -97,6 +97,16 @@ def _run(cli: HermesCLI, command: str) -> str:
     if not cmd.startswith("/"):
         cmd = f"/{cmd}"
 
+    # El descubrimiento inicial está acotado para que un servidor MCP caído no
+    # bloquee cada worker. Los comandos de inspección son distintos: devolver
+    # un catálogo /tools incompleto mientras el descubrimiento sigue activo
+    # hace que un MCP sano parezca ausente. Esperamos la ventana más larga,
+    # también acotada, antes de mostrar el catálogo.
+    if cmd.split(maxsplit=1)[0] in {"/tools", "/toolsets"}:
+        from hermes_cli.mcp_startup import wait_for_mcp_discovery
+
+        wait_for_mcp_discovery(single_query=True)
+
     buf = io.StringIO()
 
     # Rich Console captures its file handle at construction time, so
