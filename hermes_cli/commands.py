@@ -858,6 +858,76 @@ def _sanitize_telegram_name(raw: str) -> str:
     return name.strip("_")
 
 
+def resolve_quick_command(
+    quick_commands: object,
+    typed_name: str,
+) -> tuple[str, dict] | tuple[None, None]:
+    """Resuelve una orden rápida conservando su clave de configuración.
+
+    Telegram transforma guiones en guiones bajos. La clave original se
+    devuelve para que las reglas de acceso evalúen exactamente el nombre que
+    configuró el usuario.
+    """
+    if not isinstance(quick_commands, dict):
+        return None, None
+    clean_name = str(typed_name or "").lstrip("/").split()[0]
+    exact = quick_commands.get(clean_name)
+    if isinstance(exact, dict):
+        return clean_name, exact
+    telegram_name = _sanitize_telegram_name(clean_name)
+    for configured_name, command in quick_commands.items():
+        if (
+            isinstance(configured_name, str)
+            and isinstance(command, dict)
+            and _sanitize_telegram_name(configured_name) == telegram_name
+        ):
+            return configured_name, command
+    return None, None
+
+
+def _configured_quick_commands() -> dict:
+    try:
+        from hermes_cli.config import read_raw_config
+
+        raw = read_raw_config() or {}
+    except Exception:
+        return {}
+    commands = raw.get("quick_commands", {}) if isinstance(raw, dict) else {}
+    return commands if isinstance(commands, dict) else {}
+
+
+def quick_command_help_lines() -> list[str]:
+    """Devuelve las órdenes rápidas configuradas para ayuda y paginación."""
+    entries: list[str] = []
+    for configured_name, command in _configured_quick_commands().items():
+        if not isinstance(configured_name, str) or not isinstance(command, dict):
+            continue
+        description = str(command.get("description") or "User quick command").strip()
+        entries.append(f"`/{configured_name}` -- {description}")
+    if not entries:
+        return []
+    return ["User quick commands:", *entries]
+
+
+def _telegram_quick_commands(
+    reserved_names: set[str],
+) -> list[tuple[str, str]]:
+    """Genera entradas Telegram sin permitir sombrear órdenes del núcleo."""
+    entries: list[tuple[str, str]] = []
+    seen = set(reserved_names)
+    for configured_name, command in _configured_quick_commands().items():
+        if not isinstance(configured_name, str) or not isinstance(command, dict):
+            continue
+        name = _sanitize_telegram_name(configured_name)
+        if not name or name in seen:
+            continue
+        description = str(command.get("description") or "User quick command").strip()
+        description = description[:40]
+        entries.append((name, description))
+        seen.add(name)
+    return _clamp_command_names(entries, set(reserved_names))
+
+
 def _clamp_command_names(
     entries: list[tuple[str, ...]],
     reserved: set[str],
@@ -1051,9 +1121,18 @@ def telegram_menu_commands(max_commands: int = 100) -> tuple[list[tuple[str, str
         (menu_commands, hidden_count) where hidden_count is the number of
         commands omitted due to the cap.
     """
-    core_commands = _prioritize_telegram_menu_commands(list(telegram_bot_commands()))
+    core_commands = list(telegram_bot_commands())
     reserved_names = {n for n, _ in core_commands}
-    all_commands = list(core_commands)
+    priority = {
+        name: index for index, name in enumerate(_telegram_effective_priority())
+    }
+    priority_core = sorted(
+        (command for command in core_commands if command[0] in priority),
+        key=lambda command: priority[command[0]],
+    )
+    remaining_core = [command for command in core_commands if command[0] not in priority]
+    quick_commands = _telegram_quick_commands(reserved_names)
+    all_commands = [*priority_core, *quick_commands, *remaining_core]
     hidden_core_count = max(0, len(all_commands) - max_commands)
 
     remaining_slots = max(0, max_commands - len(all_commands))
