@@ -279,8 +279,7 @@ def _prune_durable_records() -> None:
     cutoff = now - _DURABLE_RETENTION_SECONDS
     with _DB_LOCK, _transaction() as conn:
         conn.execute(
-            "DELETE FROM async_delegations "
-            "WHERE delivery_state IN ('delivered', 'discarded') AND updated_at < ?",
+            "DELETE FROM async_delegations WHERE delivery_state='delivered' AND updated_at < ?",
             (cutoff,),
         )
         terminal_count = conn.execute(
@@ -557,25 +556,6 @@ def complete_completion_delivery(delegation_id: str, claim_id: str) -> bool:
                WHERE delegation_id=? AND delivery_state='pending'
                  AND delivery_claim=?""",
             (now, now, delegation_id, claim_id),
-        )
-        return cur.rowcount == 1
-
-
-def discard_completion_delivery(delegation_id: str) -> bool:
-    """Mark a completion as intentionally dropped when its owner is gone.
-
-    Fail-closed consumers must acknowledge orphaned async results. Otherwise
-    ``restore_undelivered_completions`` republishes the same event on every
-    desktop/backend restart and the poller keeps retrying it forever.
-    """
-    now = time.time()
-    with _DB_LOCK, _connect() as conn:
-        cur = conn.execute(
-            """UPDATE async_delegations SET delivery_state='discarded',
-                      delivered_at=?, updated_at=?, delivery_claim=NULL,
-                      delivery_claimed_at=NULL
-               WHERE delegation_id=? AND delivery_state='pending'""",
-            (now, now, delegation_id),
         )
         return cur.rowcount == 1
 

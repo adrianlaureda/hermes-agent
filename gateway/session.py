@@ -2172,28 +2172,15 @@ class SessionStore:
     def set_expiry_finalized(
         self, entry: SessionEntry, *, clear_model_override: bool = True
     ) -> None:
-        """Close and mark an expired session in every durable store.
+        """Mark a session entry expiry-finalized in memory, sessions.json, AND state.db.
 
-        Single write-path for the expiry watcher (#9006): first closes the
-        SQLite conversation row, then keeps the durable ``expiry_finalized``
-        flag in sync with the JSON routing index.  Closing the row is
-        important: otherwise the gateway can evict the in-memory agent while
-        ``state.db`` still treats the long transcript as live and recovers it
-        on the next Telegram turn, multiplying context and token cost.
+        Single write-path for the expiry watcher (#9006): keeps the durable
+        state.db flag in sync with the JSON routing index so the flag
+        survives sessions.json pruning/loss.
 
         ``clear_model_override=False`` preserves the give-up path's original
         behavior (flag only, no override drop).
         """
-        # Cierra la conversación durable antes de publicar el indicador de
-        # finalización. Si SQLite falla, propaga el error para que el watcher
-        # reintente, en vez de marcar completa la entrada en memoria mientras
-        # la fila sigue viva. ``end_session`` es idempotente y conserva el
-        # primer motivo, así que una carrera con ``agent_close`` es segura.
-        if self._db:
-            ender = getattr(self._db, "end_session", None)
-            if callable(ender):
-                ender(entry.session_id, "session_expired")
-
         with self._lock:
             entry.expiry_finalized = True
             if clear_model_override:

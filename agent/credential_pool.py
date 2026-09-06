@@ -2091,7 +2091,11 @@ class CredentialPool:
         Returns ``(entry, pending_refresh)`` where *pending_refresh* contains
         single-use-token entries that must be refreshed outside the lock.
         """
-        if _empty_pool_backoff_active(self.provider):
+        # A backoff is only authoritative while the pool remains empty. A
+        # credential can be added/recovered between selections (for example
+        # after re-authentication); inspect the entries in that case so the
+        # recovery is visible immediately instead of being masked for 60s.
+        if _empty_pool_backoff_active(self.provider) and not self._entries:
             return None, []
         result = self._available_entries(clear_expired=True, refresh=refresh)
         # Keep compatibility with lightweight test doubles and older plugin
@@ -2102,7 +2106,12 @@ class CredentialPool:
             available, pending_refresh = result, []
         if not available:
             self._current_id = None
-            _set_empty_pool_backoff(self.provider)
+            # A pending deferred refresh means the pool is temporarily waiting
+            # for a usable credential, not genuinely empty. Do not arm the
+            # empty-pool backoff: it would mask the freshly refreshed entry
+            # during the immediate re-selection in ``select()``.
+            if not pending_refresh:
+                _set_empty_pool_backoff(self.provider)
             self._log_no_available_entries()
             return None, pending_refresh
 
