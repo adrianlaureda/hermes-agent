@@ -34,8 +34,13 @@ def test_profile_local_mcp_tool_is_visible_in_slash_worker(tmp_path):
     server.write_text(
         textwrap.dedent(
             f"""
+            import time
+
             from mcp.server import MCPServer
 
+            # Fuerza el descubrimiento más allá del límite inicial corto. El
+            # primer /tools debe esperar al catálogo que sigue en curso.
+            time.sleep(2.0)
             mcp = MCPServer("profileprobe")
 
             @mcp.tool()
@@ -57,7 +62,9 @@ def test_profile_local_mcp_tool_is_visible_in_slash_worker(tmp_path):
                         "command": sys.executable,
                         "args": [str(server)],
                     }
-                }
+                },
+                "mcp_discovery_timeout": 0.05,
+                "mcp_single_query_discovery_timeout": 5.0,
             }
         ),
         encoding="utf-8",
