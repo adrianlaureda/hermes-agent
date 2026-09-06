@@ -24,6 +24,7 @@ import ssl
 import subprocess
 import sys
 import threading
+import time
 from urllib.parse import unquote, urlsplit
 
 ROOT, CERTS, REAL_CA = map(pathlib.Path, sys.argv[1:])
@@ -31,6 +32,12 @@ ROOT, CERTS, REAL_CA = map(pathlib.Path, sys.argv[1:])
 LISTEN_ADDRESS = ('127.0.0.1', 8080)
 MAX_REQUEST_BYTES = 65536
 UPSTREAM_TIMEOUT_SECONDS = 30
+# A transient EOF while the proxy is completing a TLS handshake is common on
+# busy public registries. Retrying the connection is safe here: the request is
+# sent only after the handshake succeeds, so no non-idempotent request is
+# replayed.
+UPSTREAM_MAX_ATTEMPTS = 3
+UPSTREAM_RETRY_DELAY_SECONDS = 0.5
 CERT_VALIDITY_DAYS = 2
 
 
@@ -150,12 +157,46 @@ def relay(source, destination):
         destination.sendall(chunk)
 
 
+def _open_upstream(host, port, *, tls):
+    """Open an upstream socket, retrying transient connect/TLS failures.
+
+    The sandbox proxy is the only network hop visible to the installer. A
+    single registry-side reset therefore used to become a hard ``npm install``
+    failure even though the same request would normally succeed on retry.
+    Retries happen before sending the HTTP request, keeping the operation safe
+    for both GETs and any future non-idempotent callers.
+    """
+    context = ssl.create_default_context(cafile=str(REAL_CA)) if tls else None
+    for attempt in range(1, UPSTREAM_MAX_ATTEMPTS + 1):
+        raw = None
+        try:
+            raw = socket.create_connection(
+                (host, port), timeout=UPSTREAM_TIMEOUT_SECONDS
+            )
+            if context is not None:
+                return context.wrap_socket(raw, server_hostname=host)
+            return raw
+        except (OSError, ssl.SSLError) as error:
+            if raw is not None:
+                raw.close()
+            if attempt == UPSTREAM_MAX_ATTEMPTS:
+                raise
+            print(
+                "upstream connection failed "
+                f"host={host} port={port} tls={tls} "
+                f"attempt={attempt}/{UPSTREAM_MAX_ATTEMPTS}: {error!r}; retrying",
+                file=sys.stderr,
+                flush=True,
+            )
+            time.sleep(UPSTREAM_RETRY_DELAY_SECONDS * attempt)
+
+    raise RuntimeError("upstream connection attempts exhausted")
+
+
 def forward_https(conn, host, port, request):
-    context = ssl.create_default_context(cafile=str(REAL_CA))
-    with socket.create_connection((host, port), timeout=UPSTREAM_TIMEOUT_SECONDS) as raw:
-        with context.wrap_socket(raw, server_hostname=host) as upstream:
-            upstream.sendall(close_request(request))
-            relay(upstream, conn)
+    with _open_upstream(host, port, tls=True) as upstream:
+        upstream.sendall(close_request(request))
+        relay(upstream, conn)
 
 
 def forward_http(conn, host, port, request, target):
@@ -163,7 +204,7 @@ def forward_http(conn, host, port, request, target):
     path = parsed.path or '/'
     if parsed.query:
         path += f'?{parsed.query}'
-    with socket.create_connection((host, port), timeout=UPSTREAM_TIMEOUT_SECONDS) as upstream:
+    with _open_upstream(host, port, tls=False) as upstream:
         upstream.sendall(close_request(request, path))
         relay(upstream, conn)
 
