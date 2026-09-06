@@ -21,15 +21,18 @@ def _run_node_deps_stage(
     tmp_path: Path,
     *,
     fail_directory: str | None,
-) -> tuple[subprocess.CompletedProcess[str], Path, list[str]]:
+) -> tuple[subprocess.CompletedProcess[str], Path, list[str], list[str]]:
     install_dir = tmp_path / "install"
     tui_dir = install_dir / "ui-tui"
+    web_dir = install_dir / "web"
     bin_dir = tmp_path / "bin"
     hermes_home = tmp_path / "home"
     managed_bin = hermes_home / "bin"
     npm_calls = tmp_path / "npm-calls"
+    npm_args = tmp_path / "npm-args"
 
     tui_dir.mkdir(parents=True)
+    web_dir.mkdir()
     bin_dir.mkdir()
     managed_bin.mkdir(parents=True)
     (install_dir / "package.json").write_text(
@@ -38,6 +41,10 @@ def _run_node_deps_stage(
     )
     (tui_dir / "package.json").write_text(
         '{"name":"tui-regression-probe","private":true}\n',
+        encoding="utf-8",
+    )
+    (web_dir / "package.json").write_text(
+        '{"name":"web-regression-probe","private":true}\n',
         encoding="utf-8",
     )
     _write_executable(bin_dir / "node", "#!/bin/sh\necho v26.0.0\n")
@@ -49,6 +56,7 @@ if [ "${1:-}" = "--version" ]; then
     exit 0
 fi
 printf '%s\\n' "$PWD" >> "$NPM_CALLS"
+printf '%s\\n' "$*" >> "$NPM_ARGS"
 if [ -n "${NPM_FAIL_DIRECTORY:-}" ] && [ "$PWD" = "$NPM_FAIL_DIRECTORY" ]; then
     echo "simulated npm lifecycle failure" >&2
     exit 37
@@ -64,6 +72,7 @@ exit 0
             "HERMES_HOME": str(hermes_home),
             "HERMES_INSTALL_DIR": str(install_dir),
             "NPM_CALLS": str(npm_calls),
+            "NPM_ARGS": str(npm_args),
             "NPM_FAIL_DIRECTORY": fail_directory or "",
             "PATH": f"{bin_dir}:{env['PATH']}",
         }
@@ -85,7 +94,8 @@ exit 0
         check=False,
     )
     calls = npm_calls.read_text(encoding="utf-8").splitlines()
-    return proc, install_dir, calls
+    args = npm_args.read_text(encoding="utf-8").splitlines()
+    return proc, install_dir, calls, args
 
 
 def _stage_result(proc: subprocess.CompletedProcess[str]) -> dict[str, object]:
@@ -94,7 +104,7 @@ def _stage_result(proc: subprocess.CompletedProcess[str]) -> dict[str, object]:
 
 def test_root_node_dependency_failure_is_fatal(tmp_path: Path) -> None:
     install_dir = tmp_path / "install"
-    proc, actual_install_dir, calls = _run_node_deps_stage(
+    proc, actual_install_dir, calls, _ = _run_node_deps_stage(
         tmp_path,
         fail_directory=str(install_dir),
     )
@@ -116,7 +126,7 @@ def test_root_node_dependency_failure_is_fatal(tmp_path: Path) -> None:
 def test_tui_node_dependency_failure_is_fatal(tmp_path: Path) -> None:
     install_dir = tmp_path / "install"
     tui_dir = install_dir / "ui-tui"
-    proc, _, calls = _run_node_deps_stage(
+    proc, _, calls, _ = _run_node_deps_stage(
         tmp_path,
         fail_directory=str(tui_dir),
     )
@@ -129,7 +139,7 @@ def test_tui_node_dependency_failure_is_fatal(tmp_path: Path) -> None:
 
 
 def test_node_dependency_success_remains_successful(tmp_path: Path) -> None:
-    proc, install_dir, calls = _run_node_deps_stage(
+    proc, install_dir, calls, args = _run_node_deps_stage(
         tmp_path,
         fail_directory=None,
     )
@@ -141,5 +151,9 @@ def test_node_dependency_success_remains_successful(tmp_path: Path) -> None:
         "skipped": False,
     }
     assert calls == [str(install_dir), str(install_dir / "ui-tui")]
+    assert args == [
+        "install --workspace ui-tui --workspace web --include-workspace-root --silent",
+        "install --silent",
+    ]
     assert "Node.js dependencies installed" in proc.stdout
     assert "TUI dependencies installed" in proc.stdout
