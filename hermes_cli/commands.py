@@ -2098,7 +2098,10 @@ class SlashCommandCompleter(Completer):
             # Older callers and lightweight completion tests patch the public
             # loader. If the readonly snapshot has no MCP section, consult
             # that compatibility path without changing the config.
-            if not isinstance(config, dict) or "mcp_servers" not in config:
+            if (
+                partial_lower
+                and (not isinstance(config, dict) or "mcp_servers" not in config)
+            ):
                 config = load_config()
             enabled = _get_platform_tools(config, "cli", include_default_mcp_servers=False)
 
