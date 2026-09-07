@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from hermes_constants import OPENROUTER_BASE_URL
+from hermes_constants import OPENROUTER_BASE_URL, get_hermes_home
 from hermes_cli.config import load_env
 from agent.secret_scope import get_secret as _get_secret
 from agent.credential_persistence import (
@@ -138,21 +138,19 @@ EXHAUSTED_TTL_SOLE_CREDENTIAL_SECONDS = 60   # 1 minute
 # los gateways; las pruebas y ejecuciones locales usan el backoff en memoria.
 EMPTY_POOL_RETRY_SECONDS = 60.0
 SHARED_EMPTY_POOL_BACKOFF_ENV = "HERMES_SHARED_BACKOFF"
-SHARED_EMPTY_POOL_BACKOFF_DIR = Path.home() / ".hermes" / "state" / "credential-backoff"
 _EMPTY_POOL_BACKOFF_UNTIL: Dict[str, float] = {}
 _EMPTY_POOL_BACKOFF_LOCK = threading.Lock()
 
 
 def _empty_pool_key(provider: str) -> str:
-    hermes_home = os.environ.get("HERMES_HOME", "").strip()
-    return f"{hermes_home}:{provider}"
+    return f"{get_hermes_home().resolve()}:{provider}"
 
 
 def _shared_empty_pool_backoff_path(provider: str) -> Optional[Path]:
     if os.environ.get(SHARED_EMPTY_POOL_BACKOFF_ENV) != "1":
         return None
     safe_provider = re.sub(r"[^A-Za-z0-9_.-]+", "_", provider).strip("._") or "provider"
-    return SHARED_EMPTY_POOL_BACKOFF_DIR / f"{safe_provider}.json"
+    return get_hermes_home() / "state" / "credential-backoff" / f"{safe_provider}.json"
 
 
 def _read_shared_empty_pool_backoff(provider: str) -> Optional[float]:
@@ -175,7 +173,7 @@ def _write_shared_empty_pool_backoff(provider: str, until: float) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
         try:
-            os.fchmod(fd, 0o600)
+            # mkstemp crea el archivo privado también sin os.fchmod (Windows).
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 json.dump({"until": until}, handle, separators=(",", ":"))
                 handle.write("\n")
@@ -779,7 +777,7 @@ class CredentialPool:
         # otherwise a status probe here can race a concurrent ``select`` /
         # rotation and tear ``self._entries`` or double-write auth.json.
         with self._lock:
-            if _empty_pool_backoff_active(self.provider):
+            if not self._entries and _empty_pool_backoff_active(self.provider):
                 return False
             available, _pending = self._available_entries()
             return bool(available)
@@ -2155,7 +2153,7 @@ class CredentialPool:
             current = self._current_unlocked()
             if current is not None:
                 return current
-            if _empty_pool_backoff_active(self.provider):
+            if not self._entries and _empty_pool_backoff_active(self.provider):
                 return None
             result = self._available_entries()
             if isinstance(result, tuple):

@@ -870,7 +870,10 @@ def resolve_quick_command(
     """
     if not isinstance(quick_commands, dict):
         return None, None
-    clean_name = str(typed_name or "").lstrip("/").split()[0]
+    parts = str(typed_name or "").lstrip("/").split()
+    if not parts:
+        return None, None
+    clean_name = parts[0]
     exact = quick_commands.get(clean_name)
     if isinstance(exact, dict):
         return clean_name, exact
