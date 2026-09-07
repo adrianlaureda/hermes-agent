@@ -364,3 +364,28 @@ def test_run_one_job_installs_secret_scope_under_multiplex(monkeypatch, tmp_path
     assert scope_during_run["base_url"] == "https://openrouter.ai/api/v1"
     # And it was torn down after run_one_job returned (no leak).
     assert ss.current_secret_scope() is None
+
+
+def test_followup_rechecks_fire_claim_before_delivery(monkeypatch):
+    """Una ejecución que pierde el turno no puede enviar el segundo mensaje."""
+    from contextlib import contextmanager
+
+    calls = _patch_pipeline(monkeypatch, final="Brief principal")
+    owns_claim = True
+
+    @contextmanager
+    def fence(*_args, **_kwargs):
+        nonlocal owns_claim
+        yield owns_claim
+        if any(call[0] == "deliver" for call in calls):
+            owns_claim = False
+
+    monkeypatch.setattr(s, "fire_claim_fence", fence)
+    monkeypatch.setattr(s, "heartbeat_fire_claim", lambda *_a, **_kw: owns_claim)
+    s.run_one_job({
+        "id": "j-followup-ownership",
+        "name": "routine",
+        "followup_message": "Segundo mensaje",
+        "fire_claim": {"by": "worker-a"},
+    })
+    assert [call[2] for call in calls if call[0] == "deliver"] == ["Brief principal"]

@@ -72,7 +72,7 @@ def test_empty_pool_backoff_is_shared_between_processes(tmp_path, monkeypatch):
     import agent.credential_pool as credential_pool
 
     monkeypatch.setenv("HERMES_SHARED_BACKOFF", "1")
-    monkeypatch.setattr(credential_pool, "SHARED_EMPTY_POOL_BACKOFF_DIR", tmp_path)
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     monkeypatch.setattr(credential_pool, "_EMPTY_POOL_BACKOFF_UNTIL", {})
 
     credential_pool._set_empty_pool_backoff("openai-codex")

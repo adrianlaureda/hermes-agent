@@ -6367,13 +6367,20 @@ def _run_one_job_body(
                     and followup_message.strip()
                 ):
                     try:
-                        delivery_error = _deliver_result(
-                            job,
-                            followup_message.strip(),
-                            adapters=adapters,
-                            loop=loop,
-                        )
+                        # Cada envío exige conservar el turno, incluido el
+                        # segundo mensaje tras liberar el cerrojo del primero.
+                        with _side_effect_fence() as owns_delivery:
+                            if not owns_delivery:
+                                raise _FireClaimLostDuringSideEffect
+                            delivery_error = _deliver_result(
+                                job,
+                                followup_message.strip(),
+                                adapters=adapters,
+                                loop=loop,
+                            )
                     except Exception as de:
+                        if isinstance(de, _FireClaimLostDuringSideEffect):
+                            raise
                         delivery_error = str(de)
                         logger.error(
                             "Follow-up delivery failed for job %s: %s",

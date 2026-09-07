@@ -277,11 +277,11 @@ def test_orphan_completion_is_discarded_and_not_restored_again(tmp_path, monkeyp
         "session_key": "owner",
         "origin_ui_session_id": "",
         "parent_session_id": None,
-        "dispatched_at": 1.0,
+        "dispatched_at": time.time() - 1,
     }
     ad._persist_dispatch(record)
     ad._persist_completion(
-        {"delegation_id": "deleg_orphan", "status": "completed", "completed_at": 2.0},
+        {"delegation_id": "deleg_orphan", "status": "completed", "completed_at": time.time()},
         {"status": "completed", "summary": "orphaned"},
     )
 
@@ -401,7 +401,7 @@ def test_recover_marks_abandoned_running_record_unknown(tmp_path, monkeypatch):
         "session_key": "owner",
         "origin_ui_session_id": "",
         "parent_session_id": None,
-        "dispatched_at": 1.0,
+        "dispatched_at": time.time() - 1,
     }
     ad._persist_dispatch(record)
     with ad._DB_LOCK, ad._connect() as conn:
@@ -424,11 +424,11 @@ def test_durable_delivery_claim_is_exclusive_and_retryable(tmp_path, monkeypatch
     record = {
         "delegation_id": "deleg_claim", "session_key": "owner",
         "origin_ui_session_id": "", "parent_session_id": None,
-        "dispatched_at": 1.0,
+        "dispatched_at": time.time() - 1,
     }
     ad._persist_dispatch(record)
     ad._persist_completion(
-        {"delegation_id": "deleg_claim", "status": "completed", "completed_at": 2.0},
+        {"delegation_id": "deleg_claim", "status": "completed", "completed_at": time.time()},
         {"status": "completed", "summary": "done"},
     )
 
@@ -894,3 +894,22 @@ def test_gateway_cli_origin_event_left_unrouted():
     runner._enrich_async_delegation_routing(evt)
     assert "platform" not in evt
 
+
+
+@pytest.mark.parametrize("completed_at", [2.0, 999_999_999.0])
+def test_old_epoch_completions_cannot_bypass_replay_age_limit(tmp_path, monkeypatch, completed_at):
+    """Una fecha antigua no puede activar un replay perpetuo tras reinicios."""
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    ad._persist_dispatch({
+        "delegation_id": "old-epoch", "session_key": "owner",
+        "origin_ui_session_id": "", "parent_session_id": None,
+        "dispatched_at": completed_at - 1,
+    })
+    ad._persist_completion(
+        {"delegation_id": "old-epoch", "status": "completed", "completed_at": completed_at},
+        {"status": "completed", "summary": "old"},
+    )
+    restored = queue.Queue()
+    assert ad.restore_undelivered_completions(restored) == 0
+    assert restored.empty()
+    assert ad.get_durable_delegation("old-epoch")["delivery_state"] == "dropped"
