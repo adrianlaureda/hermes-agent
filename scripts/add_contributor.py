@@ -55,6 +55,18 @@ def _legacy_login(email: str) -> str | None:
         return None
 
 
+def _case_collision(email: str) -> str | None:
+    """Devuelve un mapeo cuyo nombre de archivo solo difiere en mayúsculas."""
+    if not EMAILS_DIR.is_dir():
+        return None
+
+    folded = email.casefold()
+    for entry in EMAILS_DIR.iterdir():
+        if entry.name != email and entry.name.casefold() == folded:
+            return entry.name
+    return None
+
+
 def add_contributor(email: str, login: str, comment: str = "") -> int:
     email = email.strip()
     login = login.strip().lstrip("@")
@@ -67,6 +79,19 @@ def add_contributor(email: str, login: str, comment: str = "") -> int:
         return 2
 
     path = EMAILS_DIR / email
+
+    # El nombre del archivo es la clave. En macOS y Windows dos grafías que
+    # solo difieren en mayúsculas son una misma ruta: aceptar la segunda deja
+    # sucio cualquier checkout nuevo y puede sobrescribir la atribución.
+    collision = _case_collision(email)
+    if collision is not None:
+        print(
+            f"error: {email} collides with existing mapping {collision} on "
+            "case-insensitive filesystems (Windows/macOS) — resolve manually.",
+            file=sys.stderr,
+        )
+        return 1
+
     existing = read_mapping_file(path) if path.is_file() else None
     if existing is None:
         existing = _legacy_login(email)

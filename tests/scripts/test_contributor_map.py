@@ -116,3 +116,47 @@ def test_cli_entrypoint_end_to_end(tmp_path):
     assert proc.returncode == 0, proc.stderr
     out = (tmp_path / "contributors" / "emails" / "cli@example.com").read_text(encoding="utf-8")
     assert out.splitlines()[0] == "cliperson"
+
+
+# ── case-insensitive filename collisions ──────────────────────────────
+
+
+def _tracked_email_paths() -> list[str]:
+    """Lee las rutas del índice aunque el filesystem oculte una."""
+    proc = subprocess.run(
+        ["git", "ls-files", "-z", "--", "contributors/emails"],
+        cwd=REPO_ROOT,
+        check=True,
+        capture_output=True,
+    )
+    return [
+        path.decode("utf-8", errors="surrogateescape")
+        for path in proc.stdout.split(b"\0")
+        if path
+    ]
+
+
+def test_no_case_insensitive_mapping_collisions_in_index():
+    """Los nombres deben seguir siendo distintos en macOS y Windows."""
+    groups: dict[str, list[str]] = {}
+    for path in _tracked_email_paths():
+        groups.setdefault(path.casefold(), []).append(path)
+
+    collisions = [sorted(paths) for paths in groups.values() if len(paths) > 1]
+    assert not collisions, (
+        "contributor mapping paths collide on case-insensitive filesystems: "
+        f"{collisions}"
+    )
+
+
+def test_add_contributor_refuses_case_collision(tmp_path, monkeypatch):
+    d = tmp_path / "emails"
+    d.mkdir()
+    (d / "agent@Example-Host.local").write_text("someone\n", encoding="utf-8")
+
+    import add_contributor as mod
+
+    monkeypatch.setattr(mod, "EMAILS_DIR", d)
+
+    assert mod.add_contributor("agent@example-host.local", "otherperson") == 1
+    assert sorted(path.name for path in d.iterdir()) == ["agent@Example-Host.local"]

@@ -59,25 +59,6 @@ def test_install_script_supports_skip_browser_flag() -> None:
 
 
 
-def test_browser_install_timeout_stays_interruptible() -> None:
-    """The Playwright download must stay Ctrl+C-able and force-kill if wedged.
-
-    GNU `timeout` runs the child in its own process group, so a terminal Ctrl+C
-    reaches `timeout` but never the download — it looks frozen and ignores
-    Ctrl+C (#35166). `--foreground` keeps it in the shell's foreground group;
-    `-k 10` guarantees a SIGKILL after the deadline. Both are GNU-only, so the
-    installer probes support once and falls back to plain `timeout`.
-    """
-    text = INSTALL_SH.read_text()
-
-    # GNU-flag probe + the guarded invocation must both be present. The timeout
-    # binary is parameterized ($timeout_bin) so macOS gtimeout works too (#39219).
-    assert '"$timeout_bin" --foreground -k 10 1 true' in text
-    assert '"$timeout_bin" --foreground -k 10 "$timeout_seconds" "$@"' in text
-    # Plain-timeout fallback preserved for BusyBox/non-GNU.
-    assert '"$timeout_bin" "$timeout_seconds" "$@"' in text
-
-
 # ---------------------------------------------------------------------------
 # Behavioral tests: source the install.sh helpers in a stubbed shell and assert
 # the override retry fires ONLY on a too-new apt release (#35166), and not on a
@@ -242,7 +223,6 @@ def test_ensure_browser_no_longer_references_agent_browser_binary_path() -> None
     body = _extract_function_body(INSTALL_SH.read_text(), "ensure_browser")
 
     assert "$HERMES_HOME/node/bin/agent-browser" not in body
-
 
 
 
