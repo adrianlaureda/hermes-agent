@@ -20,6 +20,7 @@
  * Prerequisite: `npm run build` must have been run so that `dist/` exists.
  */
 
+import { randomUUID } from 'node:crypto'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -28,7 +29,8 @@ import { _electron, type ElectronApplication, type Page } from '@playwright/test
 
 import { resolveElectronBinary } from './electron-binary'
 import { startMockServer, type MockServerOptions } from './mock-server'
-import { installErrorBannerGuard } from './test'
+import { installErrorBannerGuard, test } from './test'
+import { closeTracedDesktop, initializeTracedDesktop } from './desktop-trace'
 
 const DESKTOP_ROOT = path.resolve(import.meta.dirname, '..')
 const REPO_ROOT = path.resolve(DESKTOP_ROOT, '..', '..')
@@ -315,13 +317,19 @@ export async function launchDesktop(
     cwd: DESKTOP_ROOT,
   })
 
-  const page = await app.firstWindow()
+  return initializeDesktop(app)
+}
 
-  // Install the error-banner guard so any [role="alert"] that appears
-  // during a test is collected and surfaced in afterEach.
-  installErrorBannerGuard(page)
-
-  return { app, page }
+async function initializeDesktop(app: ElectronApplication): Promise<{ app: ElectronApplication; page: Page }> {
+  const tracePath = test.info().outputPath(`electron-${randomUUID()}.zip`)
+  return initializeTracedDesktop(app, {
+    path: tracePath,
+    attach: () => test.info().attach('electron-trace', { path: tracePath, contentType: 'application/zip' }),
+  }, async () => {
+    const page = await app.firstWindow()
+    installErrorBannerGuard(page)
+    return { app, page }
+  })
 }
 
 // ─── Public fixtures ────────────────────────────────────────────────────
@@ -376,7 +384,14 @@ export async function setupMockBackend(options: MockBackendOptions = {}): Promis
 
   // 3. Build env + launch
   const env = buildAppEnv(sandbox)
-  const { app, page } = await launchDesktop(env)
+  const { app, page } = await launchDesktop(env).catch(async error => {
+    try {
+      await mock.close()
+    } finally {
+      sandbox.cleanup()
+    }
+    throw error
+  })
 
   return {
     app,
@@ -385,9 +400,15 @@ export async function setupMockBackend(options: MockBackendOptions = {}): Promis
     mockUrl: mock.url,
     sandbox,
     cleanup: async () => {
-      await app.close().catch(() => undefined)
-      await mock.close()
-      sandbox.cleanup()
+      try {
+        await closeTracedDesktop(app)
+      } finally {
+        try {
+          await mock.close()
+        } finally {
+          sandbox.cleanup()
+        }
+      }
     },
   }
 }
@@ -408,15 +429,21 @@ export async function setupNoProvider(): Promise<NoProviderFixture> {
   writeEmptyConfig(sandbox.hermesHome)
 
   const env = buildAppEnv(sandbox)
-  const { app, page } = await launchDesktop(env)
+  const { app, page } = await launchDesktop(env).catch(async error => {
+    sandbox.cleanup()
+    throw error
+  })
 
   return {
     app,
     page,
     sandbox,
     cleanup: async () => {
-      await app.close().catch(() => undefined)
-      sandbox.cleanup()
+      try {
+        await closeTracedDesktop(app)
+      } finally {
+        sandbox.cleanup()
+      }
     },
   }
 }
@@ -469,15 +496,21 @@ providers:
   writeEnvFile(sandbox.hermesHome)
 
   const env = buildAppEnv(sandbox, options.fakeError ? { HERMES_DESKTOP_BOOT_FAKE_ERROR: 'Failed to connect to Hermes backend: connection refused' } : {})
-  const { app, page } = await launchDesktop(env)
+  const { app, page } = await launchDesktop(env).catch(async error => {
+    sandbox.cleanup()
+    throw error
+  })
 
   return {
     app,
     page,
     sandbox,
     cleanup: async () => {
-      await app.close().catch(() => undefined)
-      sandbox.cleanup()
+      try {
+        await closeTracedDesktop(app)
+      } finally {
+        sandbox.cleanup()
+      }
     },
   }
 }
@@ -552,18 +585,26 @@ export async function setupPackagedApp(): Promise<PackagedAppFixture> {
     executablePath: PACKAGED_BINARY_PATH,
     args: ['--disable-gpu', '--no-sandbox'],
     env,
+  }).catch(error => {
+    sandbox.cleanup()
+    throw error
   })
 
-  const page = await app.firstWindow()
-  installErrorBannerGuard(page)
+  const { page } = await initializeDesktop(app).catch(error => {
+    sandbox.cleanup()
+    throw error
+  })
 
   return {
     app,
     page,
     sandbox,
     cleanup: async () => {
-      await app.close().catch(() => undefined)
-      sandbox.cleanup()
+      try {
+        await closeTracedDesktop(app)
+      } finally {
+        sandbox.cleanup()
+      }
     },
   }
 }
