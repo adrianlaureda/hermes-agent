@@ -105,7 +105,7 @@ async function setupSeededDesktop(): Promise<SeededFixture> {
 }
 
 function sessionRow(page: Page) {
-  return page.locator('[data-slot="sidebar"] button').filter({ hasText: CAPTION }).first()
+  return page.locator('[data-slot="sidebar"] button').filter({ hasText: SESSION_TITLE }).first()
 }
 
 // Inactive tabs stay mounted under a data-pane-hidden ancestor. Match the
