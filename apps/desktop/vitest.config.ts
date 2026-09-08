@@ -20,7 +20,8 @@ const electronNative: TestProjectConfiguration = {
   test: {
     name: 'electron',
     environment: 'node',
-    include: ['electron/**/*.test.ts', 'scripts/**.test.{ts,mjs}'],
+    // Los helpers E2E se prueban sin arrancar Electron ni Playwright.
+    include: ['electron/**/*.test.ts', 'scripts/**.test.{ts,mjs}', 'e2e/**/*.unit.test.ts'],
     exclude: ['scripts/run-short-session-hang-repro.test.mjs']
   }
 }

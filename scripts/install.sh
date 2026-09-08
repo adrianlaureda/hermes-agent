@@ -2126,17 +2126,15 @@ run_with_timeout() {
             timeout_bin="gtimeout"
         fi
         if [ -n "$timeout_bin" ]; then
-            # GNU `timeout` runs the command in its own process group, so a
-            # terminal Ctrl+C is delivered to `timeout` but never reaches the
-            # child — the download looks frozen and ignores Ctrl+C (#35166).
-            # `--foreground` keeps the command in the shell's foreground group
-            # so Ctrl+C reaches it; `-k 10` sends SIGKILL 10s after the deadline
-            # so a wedged download can't outlive the timeout. Both flags are
-            # GNU-only — probe once and fall back to plain `timeout` on BusyBox
-            # (Alpine). When neither binary exists (stock macOS) we drop to the
-            # pure-shell watchdog below.
-            if "$timeout_bin" --foreground -k 10 1 true >/dev/null 2>&1; then
-                "$timeout_bin" --foreground -k 10 "$timeout_seconds" "$@"
+            # GNU `timeout` must keep its process group so a stalled npm child
+            # and its descendants are terminated together. `--foreground`
+            # disables that isolation and can leave an Electron downloader
+            # alive after the deadline. The shell fallback below forwards
+            # external interrupts explicitly; GNU timeout forwards them while
+            # retaining the child group. Probe GNU's kill-after support once,
+            # then fall back to the portable invocation on BusyBox.
+            if "$timeout_bin" -k 10 1 true >/dev/null 2>&1; then
+                "$timeout_bin" -k 10 "$timeout_seconds" "$@"
             else
                 "$timeout_bin" "$timeout_seconds" "$@"
             fi
@@ -2153,12 +2151,49 @@ run_with_timeout() {
 
     local waited=0
     local rc
+    local _timeout_signal=0
+    local _timeout_previous_int _timeout_previous_term
+    _timeout_previous_int=$(trap -p INT)
+    _timeout_previous_term=$(trap -p TERM)
+    # El grupo vigilado puede quedar en segundo plano cuando el instalador
+    # recibe Ctrl+C o SIGTERM. Reenvía la señal al grupo hijo y deja que el
+    # bucle haga la limpieza y restaure el trap del llamador.
+    trap '_timeout_signal=130; kill -INT "-$cmd_pid" 2>/dev/null || kill -INT "$cmd_pid" 2>/dev/null || true' INT
+    trap '_timeout_signal=143; kill -TERM "-$cmd_pid" 2>/dev/null || kill -TERM "$cmd_pid" 2>/dev/null || true' TERM
     while [ "$waited" -lt "$timeout_seconds" ]; do
+        if [ "$_timeout_signal" -ne 0 ]; then
+            local _signal_waited=0
+            while [ "$_signal_waited" -lt 2 ] && kill -0 "$cmd_pid" 2>/dev/null; do
+                sleep 1
+                _signal_waited=$((_signal_waited + 1))
+            done
+            # El líder puede haber salido al procesar la señal mientras un
+            # descendiente sigue vivo. El PGID conserva el mismo identificador
+            # aunque el líder haya muerto, por lo que siempre se escala contra
+            # el grupo completo.
+            kill -TERM "-$cmd_pid" 2>/dev/null || kill -TERM "$cmd_pid" 2>/dev/null || true
+            sleep 2
+            kill -KILL "-$cmd_pid" 2>/dev/null || kill -KILL "$cmd_pid" 2>/dev/null || true
+            wait "$cmd_pid" 2>/dev/null || true
+            if [ -n "$_timeout_previous_int" ]; then
+                eval "$_timeout_previous_int"
+            else
+                trap - INT
+            fi
+            if [ -n "$_timeout_previous_term" ]; then
+                eval "$_timeout_previous_term"
+            else
+                trap - TERM
+            fi
+            return "$_timeout_signal"
+        fi
         if ! kill -0 "$cmd_pid" 2>/dev/null; then
             # `|| rc=$?` keeps the non-zero child status without letting `set -e`
             # abort the caller here (this would fire if run_with_timeout were
             # ever called outside an if/|| context).
             rc=0; wait "$cmd_pid" 2>/dev/null || rc=$?
+            if [ -n "$_timeout_previous_int" ]; then eval "$_timeout_previous_int"; else trap - INT; fi
+            if [ -n "$_timeout_previous_term" ]; then eval "$_timeout_previous_term"; else trap - TERM; fi
             return "$rc"
         fi
         sleep 1
@@ -2170,6 +2205,8 @@ run_with_timeout() {
     # exited cleanly in the last second of the budget.
     if ! kill -0 "$cmd_pid" 2>/dev/null; then
         rc=0; wait "$cmd_pid" 2>/dev/null || rc=$?
+        if [ -n "$_timeout_previous_int" ]; then eval "$_timeout_previous_int"; else trap - INT; fi
+        if [ -n "$_timeout_previous_term" ]; then eval "$_timeout_previous_term"; else trap - TERM; fi
         return "$rc"
     fi
 
@@ -2178,6 +2215,8 @@ run_with_timeout() {
     sleep 2
     kill -KILL "-$cmd_pid" 2>/dev/null || kill -KILL "$cmd_pid" 2>/dev/null || true
     wait "$cmd_pid" 2>/dev/null || true
+    if [ -n "$_timeout_previous_int" ]; then eval "$_timeout_previous_int"; else trap - INT; fi
+    if [ -n "$_timeout_previous_term" ]; then eval "$_timeout_previous_term"; else trap - TERM; fi
     return 124
 }
 
@@ -3551,12 +3590,14 @@ main() {
     echo "git" > "$INSTALL_DIR/.install_method"
 }
 
-if [ "$MANIFEST_MODE" = true ]; then
-    emit_manifest
-elif [ -n "$STAGE_NAME" ]; then
-    run_stage_protocol "$STAGE_NAME"
-elif [ -n "$ENSURE_DEPS" ]; then
-    ensure_mode
-else
-    main
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+    if [ "$MANIFEST_MODE" = true ]; then
+        emit_manifest
+    elif [ -n "$STAGE_NAME" ]; then
+        run_stage_protocol "$STAGE_NAME"
+    elif [ -n "$ENSURE_DEPS" ]; then
+        ensure_mode
+    else
+        main
+    fi
 fi
