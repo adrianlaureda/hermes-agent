@@ -1,5 +1,3 @@
-import './e2e/fix-electron-tracing'
-
 import { defineConfig, type ReporterDescription } from '@playwright/test'
 
 /**
