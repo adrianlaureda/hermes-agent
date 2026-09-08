@@ -1,3 +1,5 @@
+import { closeTracedDesktop } from './desktop-trace'
+
 /**
  * E2E at-rest contract for the remote-gateway session token (issue #77486).
  *
@@ -616,7 +618,7 @@ test.describe('remote gateway session token at rest', () => {
     // ── Secondary: the credential must still be USABLE ─────────────────
     // Restart against the same userData so the token comes off disk, not out
     // of a live process's memory.
-    await app.close().catch(() => undefined)
+    await closeTracedDesktop(app)
     app = null
 
     const second = await launchAgainst(sandbox)
@@ -696,7 +698,7 @@ test.describe('remote gateway session token at rest', () => {
     const saved = await saveRemoteToken(first.page, fake.url, SENTINEL_TOKEN)
     expect(saved.error, 'the fixture write must succeed, or there is nothing to tighten').toBeNull()
 
-    await app.close().catch(() => undefined)
+    await closeTracedDesktop(app)
     app = null
 
     // Regress the file to what a pre-fix install has on disk. Everything else

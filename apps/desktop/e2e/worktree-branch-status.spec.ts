@@ -1,3 +1,5 @@
+import { closeTracedDesktop } from './desktop-trace'
+
 import { execFileSync } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
@@ -94,7 +96,7 @@ test.beforeAll(async () => {
     mockUrl: mock.url,
     sandbox,
     cleanup: async () => {
-      await app.close().catch(() => undefined)
+      await closeTracedDesktop(app)
       await mock.close()
       sandbox.cleanup()
     },

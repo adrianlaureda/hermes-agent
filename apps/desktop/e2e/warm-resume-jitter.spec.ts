@@ -1,3 +1,5 @@
+import { closeTracedDesktop } from './desktop-trace'
+
 /**
  * E2E regression: warm-route resume must not re-render the transcript more
  * than once.
@@ -132,7 +134,7 @@ async function setupSeededMockBackend(): Promise<MockBackendFixture> {
     mockUrl: mock.url,
     sandbox,
     cleanup: async () => {
-      await app.close().catch(() => undefined)
+      await closeTracedDesktop(app)
       await mock.close()
       sandbox.cleanup()
     },

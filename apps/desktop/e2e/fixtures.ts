@@ -20,6 +20,7 @@
  * Prerequisite: `npm run build` must have been run so that `dist/` exists.
  */
 
+import { randomUUID } from 'node:crypto'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
@@ -28,7 +29,8 @@ import { _electron, type ElectronApplication, type Page } from '@playwright/test
 
 import { resolveElectronBinary } from './electron-binary'
 import { startMockServer, type MockServerOptions } from './mock-server'
-import { installErrorBannerGuard } from './test'
+import { installErrorBannerGuard, test } from './test'
+import { closeTracedDesktop, startDesktopTrace } from './desktop-trace'
 
 const DESKTOP_ROOT = path.resolve(import.meta.dirname, '..')
 const REPO_ROOT = path.resolve(DESKTOP_ROOT, '..', '..')
@@ -315,6 +317,11 @@ export async function launchDesktop(
     cwd: DESKTOP_ROOT,
   })
 
+  const tracePath = test.info().outputPath(`electron-${randomUUID()}.zip`)
+  await startDesktopTrace(app, {
+    path: tracePath,
+    attach: () => test.info().attach('electron-trace', { path: tracePath, contentType: 'application/zip' }),
+  })
   const page = await app.firstWindow()
 
   // Install the error-banner guard so any [role="alert"] that appears
@@ -385,7 +392,7 @@ export async function setupMockBackend(options: MockBackendOptions = {}): Promis
     mockUrl: mock.url,
     sandbox,
     cleanup: async () => {
-      await app.close().catch(() => undefined)
+      await closeTracedDesktop(app)
       await mock.close()
       sandbox.cleanup()
     },
@@ -415,7 +422,7 @@ export async function setupNoProvider(): Promise<NoProviderFixture> {
     page,
     sandbox,
     cleanup: async () => {
-      await app.close().catch(() => undefined)
+      await closeTracedDesktop(app)
       sandbox.cleanup()
     },
   }
@@ -476,7 +483,7 @@ providers:
     page,
     sandbox,
     cleanup: async () => {
-      await app.close().catch(() => undefined)
+      await closeTracedDesktop(app)
       sandbox.cleanup()
     },
   }
@@ -554,6 +561,11 @@ export async function setupPackagedApp(): Promise<PackagedAppFixture> {
     env,
   })
 
+  const tracePath = test.info().outputPath(`electron-${randomUUID()}.zip`)
+  await startDesktopTrace(app, {
+    path: tracePath,
+    attach: () => test.info().attach('electron-trace', { path: tracePath, contentType: 'application/zip' }),
+  })
   const page = await app.firstWindow()
   installErrorBannerGuard(page)
 
@@ -562,7 +574,7 @@ export async function setupPackagedApp(): Promise<PackagedAppFixture> {
     page,
     sandbox,
     cleanup: async () => {
-      await app.close().catch(() => undefined)
+      await closeTracedDesktop(app)
       sandbox.cleanup()
     },
   }

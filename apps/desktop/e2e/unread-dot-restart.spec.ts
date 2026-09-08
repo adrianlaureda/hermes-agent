@@ -1,3 +1,5 @@
+import { closeTracedDesktop } from './desktop-trace'
+
 /**
  * E2E test for PERSISTED unread state — the green "Finished — unread" dot
  * must survive an app restart.
@@ -91,7 +93,7 @@ test.describe('unread dot survives app restart', () => {
   /** Relaunch the desktop app against the SAME sandbox (same userData →
    *  same localStorage, same HERMES_HOME → same session store). */
   async function restartApp(): Promise<void> {
-    await app.close()
+    await closeTracedDesktop(app)
 
     const relaunched = await launchDesktop(buildAppEnv(fixture.sandbox))
     app = relaunched.app

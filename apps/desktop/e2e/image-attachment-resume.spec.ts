@@ -1,3 +1,5 @@
+import { closeTracedDesktop } from './desktop-trace'
+
 /**
  * Regression coverage for an attached image in a durable session. The gateway
  * persists the turn, the builder exits, and desktop renders it from SessionDB
@@ -82,7 +84,7 @@ async function setupSeededDesktop(): Promise<SeededFixture> {
     page,
     sandbox,
     cleanup: async () => {
-      await app.close().catch(() => undefined)
+      await closeTracedDesktop(app)
       await mock.close()
       sandbox.cleanup()
     },

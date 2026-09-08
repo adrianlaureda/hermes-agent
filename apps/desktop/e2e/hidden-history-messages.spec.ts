@@ -1,3 +1,5 @@
+import { closeTracedDesktop } from './desktop-trace'
+
 /**
  * E2E regression: desktop resume must hide agent-only transcript rows.
  *
@@ -65,7 +67,7 @@ async function setupSeededMockBackend(): Promise<MockBackendFixture> {
     mockUrl: mock.url,
     sandbox,
     cleanup: async () => {
-      await app.close().catch(() => undefined)
+      await closeTracedDesktop(app)
       await mock.close()
       sandbox.cleanup()
     },
@@ -119,7 +121,7 @@ test('live verify-on-stop continuations stay out of the transcript', async ({}, 
     mockUrl: mock.url,
     sandbox,
     cleanup: async () => {
-      await app.close().catch(() => undefined)
+      await closeTracedDesktop(app)
       await mock.close()
       sandbox.cleanup()
     },

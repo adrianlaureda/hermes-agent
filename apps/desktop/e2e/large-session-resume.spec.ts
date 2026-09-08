@@ -1,3 +1,5 @@
+import { closeTracedDesktop } from './desktop-trace'
+
 import * as path from 'node:path'
 
 import { type TestInfo } from '@playwright/test'
@@ -67,7 +69,7 @@ async function setupSeededDesktop(mockServer?: MockServerOptions): Promise<Seede
     page,
     sandbox,
     cleanup: async () => {
-      await app.close().catch(() => undefined)
+      await closeTracedDesktop(app)
       await mock.close()
       sandbox.cleanup()
     },
