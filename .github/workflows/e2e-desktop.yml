@@ -7,6 +7,12 @@ on:
         description: Screenshot and visual-diff status for the CI review comment.
         value: ${{ jobs.e2e.outputs.review_status }}
   workflow_dispatch:
+    inputs:
+      suite:
+        description: Suite completa o diagnóstico acotado de arranque y cierre.
+        type: choice
+        options: [all, boot]
+        default: all
 
 permissions:
   contents: read
@@ -106,16 +112,24 @@ jobs:
       - name: Run Playwright E2E tests
         working-directory: apps/desktop
         run: |
-          if [ "${{ github.ref_name }}" = "main" ]; then
-            echo "On main — generating/updating baseline screenshots"
-            npm run build && xvfb-run -a --server-args="-screen 0 1280x1024x24" \
-              npx playwright test --reporter=list --update-snapshots
-          else
-            echo "On PR — comparing against cached baselines"
-            npm run build && xvfb-run -a --server-args="-screen 0 1280x1024x24" \
-              npx playwright test --reporter=list
+          test_args=(--global-timeout=900000)
+          case "$E2E_SUITE" in
+            all) ;;
+            boot)
+              test_args+=(e2e/boot-failure.spec.ts e2e/boot.spec.ts --max-failures=1 --retries=0)
+              ;;
+            *) echo "Unknown E2E suite: $E2E_SUITE" >&2; exit 2 ;;
+          esac
+          if [ "$GITHUB_REF_NAME" = "main" ]; then
+            test_args+=(--update-snapshots)
           fi
+          # Conserva los reporteros HTML/JSON configurados y permite publicar
+          # evidencias antes de que expire el límite global del job.
+          npm run build
+          xvfb-run -a --server-args="-screen 0 1280x1024x24" \
+            npx playwright test "${test_args[@]}"
         env:
+          E2E_SUITE: ${{ inputs.suite || 'all' }}
           CI: 'true'
           # Ensure no real API keys leak into the test env.
           OPENROUTER_API_KEY: ''
