@@ -21,6 +21,30 @@ import { expectVisualSnapshot } from './visual-snapshot'
 let fixture: DeadBackendFixture | null = null
 
 test.afterAll(async () => {
+  if (fixture) {
+    const child = fixture.app.process()
+    child.once('exit', (code, signal) => console.log('[quit-probe] process-exit', code, signal))
+    child.stderr?.on('data', (data: Buffer) => {
+      for (const line of data.toString().split('\n')) {
+        if (line.includes('[quit-probe]')) console.log(line)
+      }
+    })
+    console.log('[quit-probe] before-inspection')
+    await fixture.app.evaluate(({ app, BrowserWindow }) => {
+      const emit = (event: string, extra: unknown = null) => process.stderr.write(
+        '[quit-probe] ' + JSON.stringify({ event, extra, windows: BrowserWindow.getAllWindows().length }) + '\n',
+      )
+      app.on('before-quit', event => emit('before-quit', event.defaultPrevented))
+      app.on('will-quit', event => emit('will-quit', event.defaultPrevented))
+      app.on('quit', () => emit('quit'))
+      for (const window of BrowserWindow.getAllWindows()) {
+        window.on('close', event => emit('window-close', event.defaultPrevented))
+        window.on('closed', () => emit('window-closed'))
+      }
+      emit('ready')
+    })
+    console.log('[quit-probe] before-cleanup')
+  }
   await fixture?.cleanup()
   fixture = null
 })
