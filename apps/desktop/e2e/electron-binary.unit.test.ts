@@ -25,7 +25,7 @@ function temporaryDirectory(): string {
 
 function fakeElectronPackage(root: string): string {
   const packageDirectory = path.join(root, 'node_modules', 'electron')
-  const binary = path.join(packageDirectory, 'dist', electronBinaryName())
+  const binary = electronDistCandidates([root])[0]
 
   fs.mkdirSync(path.dirname(binary), { recursive: true })
   fs.writeFileSync(
@@ -58,7 +58,7 @@ describe('electronBinaryName', () => {
 
   it('usa electron en el resto de plataformas', () => {
     expect(electronBinaryName('linux')).toBe('electron')
-    expect(electronBinaryName('darwin')).toBe('electron')
+    expect(electronBinaryName('darwin')).toBe('Electron')
   })
 })
 
@@ -78,6 +78,12 @@ describe('electronDistCandidates', () => {
       expect(path.basename(candidate)).toBe('electron.exe')
     }
   })
+
+  it('usa la ruta del bundle Electron.app en macOS', () => {
+    expect(electronDistCandidates([repo], 'darwin')).toEqual([
+      path.join(repo, 'node_modules', 'electron', 'dist', 'Electron.app', 'Contents', 'MacOS', 'Electron'),
+    ])
+  })
 })
 
 describe('pathLookupCommand', () => {
@@ -89,6 +95,22 @@ describe('pathLookupCommand', () => {
 })
 
 describe('resolveElectronBinary', () => {
+  it('encuentra el ejecutable nativo aunque falle el export del package', () => {
+    const root = temporaryDirectory()
+    const packageDirectory = path.join(root, 'node_modules', 'electron')
+    const relativeBinary = process.platform === 'darwin'
+      ? ['Electron.app', 'Contents', 'MacOS', 'Electron']
+      : [process.platform === 'win32' ? 'electron.exe' : 'electron']
+    const expected = path.join(packageDirectory, 'dist', ...relativeBinary)
+
+    fs.mkdirSync(path.dirname(expected), { recursive: true })
+    fs.writeFileSync(path.join(packageDirectory, 'package.json'), JSON.stringify({ main: 'index.js' }))
+    fs.writeFileSync(path.join(packageDirectory, 'index.js'), 'throw new Error("fixture: unavailable export")')
+    fs.writeFileSync(expected, '')
+
+    expect(resolveElectronBinary([root])).toBe(expected)
+  })
+
   it('prefiere el package export del workspace al package hoisted', () => {
     const root = temporaryDirectory()
     const desktop = path.join(root, 'apps', 'desktop')

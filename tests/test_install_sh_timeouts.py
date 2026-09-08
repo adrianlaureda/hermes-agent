@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import shlex
 import signal
-import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -15,6 +14,10 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 INSTALL_SH = REPO_ROOT / "scripts" / "install.sh"
+
+# Estos tests lanzan señuelos en sesiones y grupos de procesos propios para
+# probar señales reales sin tocar procesos del runner.
+pytestmark = pytest.mark.live_system_guard_bypass
 
 
 def _run_timeout(tmp_path: Path, command: str) -> subprocess.CompletedProcess[str]:
@@ -26,6 +29,7 @@ def _run_timeout(tmp_path: Path, command: str) -> subprocess.CompletedProcess[st
         ["bash", "-c", script],
         cwd=REPO_ROOT,
         env=env,
+        start_new_session=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -99,16 +103,29 @@ while :; do sleep 1; done
     assert term_marker.read_text(encoding="utf-8") == "term"
 
 
-@pytest.mark.live_system_guard_bypass
-def test_external_sigint_is_forwarded_to_watched_group(tmp_path: Path) -> None:
-    """Una interrupción externa cancela el grupo vigilado y no queda colgada."""
-    probe = tmp_path / "trap-int.sh"
+@pytest.mark.parametrize(
+    ("signal_to_send", "expected_marker", "expected_rc"),
+    [
+        (signal.SIGINT, "int", 130),
+        (signal.SIGTERM, "term", 143),
+    ],
+    ids=["sigint", "sigterm"],
+)
+def test_external_signal_is_forwarded_to_watched_group(
+    tmp_path: Path,
+    signal_to_send: signal.Signals,
+    expected_marker: str,
+    expected_rc: int,
+) -> None:
+    """Una interrupción externa cancela el grupo vigilado sin quedar colgada."""
+    probe = tmp_path / "trap-signal.sh"
     int_marker = tmp_path / "int-received"
     probe.write_text(
         """#!/bin/sh
 marker=$1
 printf ready > "$marker.ready"
 trap 'printf int > "$marker"; exit 130' INT
+trap 'printf term > "$marker"; exit 143' TERM
 while :; do sleep 1; done
 """,
         encoding="utf-8",
@@ -138,18 +155,17 @@ while :; do sleep 1; done
             if time.monotonic() >= deadline:
                 raise AssertionError("el señuelo no arrancó")
             time.sleep(0.05)
-        os.killpg(process.pid, signal.SIGINT)
+        os.killpg(process.pid, signal_to_send)
         stdout, stderr = process.communicate(timeout=6)
     finally:
         if process.poll() is None:
             os.killpg(process.pid, signal.SIGKILL)
             process.wait(timeout=2)
 
-    assert "WATCHDOG_RC=130" in stdout, stderr
-    assert int_marker.read_text(encoding="utf-8") == "int"
+    assert f"WATCHDOG_RC={expected_rc}" in stdout, stderr
+    assert int_marker.read_text(encoding="utf-8") == expected_marker
 
 
-@pytest.mark.live_system_guard_bypass
 def test_external_sigint_cleans_descendant_after_leader_exit(tmp_path: Path) -> None:
     """La limpieza alcanza a un hijo que sobrevive a la salida del líder."""
     probe = tmp_path / "leader-exits-on-int.sh"
@@ -247,33 +263,6 @@ probe() {{
 run_with_timeout 1 probe
 """
     result = _run_timeout(tmp_path, command)
-
-    assert result.returncode == 124, result.stderr
-    time.sleep(2.3)
-    assert not sentinel.exists()
-
-
-def test_gnu_timeout_cleans_external_descendants(tmp_path: Path) -> None:
-    """La ruta GNU también debe limpiar el árbol del comando externo."""
-    timeout_bin = shutil.which("timeout") or shutil.which("gtimeout")
-    if timeout_bin is None:
-        pytest.skip("no hay GNU timeout/gtimeout en este runner")
-    probe = tmp_path / "spawn-child.sh"
-    sentinel = tmp_path / "gnu-child-survived"
-    _write_probe(probe)
-    supports_gnu_flags = subprocess.run(
-        [timeout_bin, "--foreground", "-k", "1", "0.01", "true"],
-        capture_output=True,
-        check=False,
-    ).returncode == 0
-    if not supports_gnu_flags:
-        pytest.skip("timeout disponible sin soporte GNU --foreground/-k")
-
-    result = _run_timeout(
-        tmp_path,
-        "run_with_timeout 1 "
-        f"{shlex.quote(str(probe))} {shlex.quote(str(sentinel))}",
-    )
 
     assert result.returncode == 124, result.stderr
     time.sleep(2.3)

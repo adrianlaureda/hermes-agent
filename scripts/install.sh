@@ -2090,60 +2090,28 @@ run_browser_install_with_timeout() {
     run_with_timeout "$@"
 }
 
-# Run a command with a hard wall-clock timeout, returning non-zero if it is
-# killed. Prefers GNU coreutils `timeout` (Linux) or `gtimeout` (macOS via
-# Homebrew) for an external-command target; otherwise (and always for a shell
-# function target, which the `timeout` binary cannot exec) it uses a pure-shell
-# watchdog: launch the command in its own process group, poll until it finishes,
-# and SIGTERM (then SIGKILL) the whole group on timeout. The pure-shell path is
-# what protects the bug-#39219 case — a stalled Electron download on macOS,
-# where `timeout` is usually absent — turning an indefinite hang into a non-zero
-# exit so callers (install_desktop) can self-heal via the mirror fallback.
+# Ejecuta cualquier comando con un límite de tiempo estricto y devuelve un
+# código distinto de cero si se cancela. El watchdog shell único hace que los
+# comandos externos y las funciones compartan el mismo contrato de grupo y
+# señales en todos los hosts. Protege el caso #39219 — una descarga de Electron
+# bloqueada — convirtiendo el bloqueo indefinido en un error para que
+# install_desktop pueda activar su fallback.
 #
-# $1 (timeout) must be a bare integer number of seconds — the pure-shell loop
-# compares it arithmetically (the `timeout` binary would also accept suffixes
-# like 15m, but we normalize so both paths share one contract). On timeout the
-# return code is 124, matching GNU `timeout`.
+# $1 (timeout) debe ser un número entero de segundos. El bucle shell lo compara
+# aritméticamente, así que normalizamos valores vacíos o con sufijos al valor
+# predeterminado. Un vencimiento devuelve 124, igual que GNU timeout.
 run_with_timeout() {
     local timeout_seconds="$1"
     shift
 
-    # Normalize to a bare integer; fall back to the desktop default if a caller
-    # ever passes a suffixed/empty value (the pure-shell loop needs an int).
+    # Normaliza a un entero; usa el valor predeterminado del escritorio si el
+    # llamador entrega un valor vacío o con sufijo.
     case "$timeout_seconds" in
         ''|*[!0-9]*) timeout_seconds=900 ;;
     esac
 
-    # The `timeout` binary can only exec an external command, not a shell
-    # function. Use it only when the target is NOT a function; functions always
-    # go through the pure-shell watchdog (which runs them in a subshell of the
-    # current shell and sees them directly — no fragile env export needed).
-    if [ "$(type -t "$1" 2>/dev/null)" != "function" ]; then
-        local timeout_bin=""
-        if command -v timeout >/dev/null 2>&1; then
-            timeout_bin="timeout"
-        elif command -v gtimeout >/dev/null 2>&1; then
-            timeout_bin="gtimeout"
-        fi
-        if [ -n "$timeout_bin" ]; then
-            # GNU `timeout` must keep its process group so a stalled npm child
-            # and its descendants are terminated together. `--foreground`
-            # disables that isolation and can leave an Electron downloader
-            # alive after the deadline. The shell fallback below forwards
-            # external interrupts explicitly; GNU timeout forwards them while
-            # retaining the child group. Probe GNU's kill-after support once,
-            # then fall back to the portable invocation on BusyBox.
-            if "$timeout_bin" -k 10 1 true >/dev/null 2>&1; then
-                "$timeout_bin" -k 10 "$timeout_seconds" "$@"
-            else
-                "$timeout_bin" "$timeout_seconds" "$@"
-            fi
-            return $?
-        fi
-    fi
-
-    # Pure-shell fallback: run in a new process group so we can kill the whole
-    # subtree (npm spawns node + the Electron downloader as children).
+    # Ejecuta en un grupo nuevo para poder cancelar todo el árbol (npm crea
+    # node y el descargador de Electron como descendientes).
     set -m
     ( "$@" ) &
     local cmd_pid=$!
@@ -2188,9 +2156,8 @@ run_with_timeout() {
             return "$_timeout_signal"
         fi
         if ! kill -0 "$cmd_pid" 2>/dev/null; then
-            # `|| rc=$?` keeps the non-zero child status without letting `set -e`
-            # abort the caller here (this would fire if run_with_timeout were
-            # ever called outside an if/|| context).
+            # `|| rc=$?` conserva el código distinto de cero sin que `set -e`
+            # aborte el llamador mientras calculamos el resultado.
             rc=0; wait "$cmd_pid" 2>/dev/null || rc=$?
             if [ -n "$_timeout_previous_int" ]; then eval "$_timeout_previous_int"; else trap - INT; fi
             if [ -n "$_timeout_previous_term" ]; then eval "$_timeout_previous_term"; else trap - TERM; fi
@@ -2200,9 +2167,8 @@ run_with_timeout() {
         waited=$((waited + 1))
     done
 
-    # Final boundary recheck: the command may have finished during the last
-    # poll interval — don't kill (and mislabel as 124) a process that already
-    # exited cleanly in the last second of the budget.
+    # Comprueba de nuevo el límite: el comando pudo terminar durante el último
+    # intervalo; no lo mates ni lo marques como 124 si ya salió correctamente.
     if ! kill -0 "$cmd_pid" 2>/dev/null; then
         rc=0; wait "$cmd_pid" 2>/dev/null || rc=$?
         if [ -n "$_timeout_previous_int" ]; then eval "$_timeout_previous_int"; else trap - INT; fi
@@ -2210,7 +2176,7 @@ run_with_timeout() {
         return "$rc"
     fi
 
-    # Timed out: kill the process group (negative PID), escalate to KILL.
+    # Vencido el límite: termina el grupo (PID negativo) y escala a KILL.
     kill -TERM "-$cmd_pid" 2>/dev/null || kill -TERM "$cmd_pid" 2>/dev/null || true
     sleep 2
     kill -KILL "-$cmd_pid" 2>/dev/null || kill -KILL "$cmd_pid" 2>/dev/null || true
@@ -3590,7 +3556,7 @@ main() {
     echo "git" > "$INSTALL_DIR/.install_method"
 }
 
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+if [[ "${BASH_SOURCE[0]:-$0}" == "$0" ]]; then
     if [ "$MANIFEST_MODE" = true ]; then
         emit_manifest
     elif [ -n "$STAGE_NAME" ]; then

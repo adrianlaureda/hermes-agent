@@ -12,7 +12,11 @@ import * as path from 'node:path'
 
 /** Nombre del ejecutable distribuido por Electron según la plataforma. */
 export function electronBinaryName(platform: NodeJS.Platform = process.platform): string {
-  return platform === 'win32' ? 'electron.exe' : 'electron'
+  if (platform === 'win32') {
+    return 'electron.exe'
+  }
+
+  return platform === 'darwin' ? 'Electron' : 'electron'
 }
 
 /**
@@ -20,7 +24,13 @@ export function electronBinaryName(platform: NodeJS.Platform = process.platform)
  * La instalación del workspace debe ganar a la copia hoisted del repositorio.
  */
 export function electronDistCandidates(roots: string[], platform: NodeJS.Platform = process.platform): string[] {
-  return roots.map(root => path.join(root, 'node_modules', 'electron', 'dist', electronBinaryName(platform)))
+  // En macOS el ejecutable vive dentro del bundle Electron.app.
+  const binaryPath =
+    platform === 'darwin'
+      ? ['Electron.app', 'Contents', 'MacOS', electronBinaryName(platform)]
+      : [electronBinaryName(platform)]
+
+  return roots.map(root => path.join(root, 'node_modules', 'electron', 'dist', ...binaryPath))
 }
 
 /** Comando de búsqueda del PATH en cada plataforma. */
