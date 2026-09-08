@@ -50,3 +50,37 @@ def test_agent_cbs_includes_interim_callback_when_enabled():
     assert emitted[0][2]["already_streamed"] is True
 
 
+def test_history_projection_respects_disabled_interim_messages():
+    """La recarga conserva herramientas y respuesta final, sin narración desactivada."""
+    from tui_gateway.server import _history_to_messages
+
+    history = [
+        {"role": "user", "content": "consulta"},
+        {
+            "role": "assistant",
+            "content": "narracion intermedia",
+            "tool_calls": [{
+                "id": "call_1",
+                "function": {"name": "todo", "arguments": '{"action":"read"}'},
+            }],
+        },
+        {"role": "tool", "tool_call_id": "call_1", "content": "hecho"},
+        {"role": "assistant", "content": "respuesta final"},
+    ]
+    with patch(
+        "tui_gateway.server._load_cfg",
+        return_value={"display": {"interim_assistant_messages": False}},
+    ):
+        rows = _history_to_messages(history)
+    assert [row.get("text") for row in rows if row["role"] == "assistant"] == ["respuesta final"]
+    assert next(row for row in rows if row["role"] == "tool")["args"] == {"action": "read"}
+
+
+def test_agent_cbs_omits_interim_callback_when_disabled():
+    from tui_gateway.server import _agent_cbs
+
+    with patch(
+        "tui_gateway.server._load_cfg",
+        return_value={"display": {"interim_assistant_messages": False}},
+    ):
+        assert "interim_assistant_callback" not in _agent_cbs("test-session")

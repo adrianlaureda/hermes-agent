@@ -52,8 +52,10 @@ const SESSION_TITLE = 'E2E Warm Resume Jitter Test'
 // renderer's keep-alive visibility policy instead of relying on DOM order.
 const SURFACE = '[data-composer-target]:not([data-pane-hidden] [data-composer-target])'
 const ALL_SURFACES = '[data-composer-target]'
-/** 32 messages (16 user/assistant pairs) — enough DOM churn for detection. */
-const MESSAGE_COUNT = 32
+const WARM_SURFACE_MARKER = 'data-e2e-warm-resume-surface'
+const WARM_SURFACE_SELECTOR = `[${WARM_SURFACE_MARKER}]`
+/** 16 messages (8 user/assistant pairs) — stays within the hidden DOM budget. */
+const MESSAGE_COUNT = 16
 /** Seeded PRNG so the generated content is deterministic across runs. */
 const RNG_SEED = 42
 
@@ -179,14 +181,17 @@ test.afterAll(async () => {
 async function installRenderCounter(
   page: import('@playwright/test').Page,
   transcriptText?: string,
+  targetSelector?: string,
 ): Promise<void> {
-  await page.evaluate(([visibleSelector, allSelector, expected]: [string, string, string | undefined]) => {
-    const surfaces = [...document.querySelectorAll(expected ? allSelector : visibleSelector)]
-    const surface = expected
-      ? surfaces.find(candidate =>
-          (candidate.querySelector('[data-slot="aui_thread-viewport"]')?.textContent ?? '').includes(expected),
-        )
-      : surfaces.at(-1)
+  await page.evaluate(([visibleSelector, allSelector, expected, markerSelector]: [string, string, string | undefined, string | undefined]) => {
+    const surfaces = [...document.querySelectorAll(markerSelector ?? (expected ? allSelector : visibleSelector))]
+    const surface = markerSelector
+      ? surfaces.at(-1)
+      : expected
+        ? surfaces.find(candidate =>
+            (candidate.querySelector('[data-slot="aui_thread-viewport"]')?.textContent ?? '').includes(expected),
+          )
+        : surfaces.at(-1)
     const viewport = surface?.querySelector('[data-slot="aui_thread-viewport"]')
     if (!viewport) {
       throw new Error('Thread viewport not found before warm resume')
@@ -260,7 +265,24 @@ async function installRenderCounter(
         hasMessages = true
       }
     }, 2)
-  }, [SURFACE, ALL_SURFACES, transcriptText] as [string, string, string | undefined])
+  }, [SURFACE, ALL_SURFACES, transcriptText, targetSelector] as [string, string, string | undefined, string | undefined])
+}
+
+/** Marca la superficie exacta conservada antes de abrir la pestaña de borrador.
+ *
+ * El renderer limita deliberadamente el DOM del transcript oculto, por lo que
+ * el primer mensaje puede desaparecer aunque la superficie siga montada.
+ * El marcador sigue el nodo y falla si la pestaña se aparca o desmonta.
+ */
+async function markWarmResumeSurface(page: import('@playwright/test').Page): Promise<void> {
+  await page.evaluate(([surfaceSelector, marker]: [string, string]) => {
+    const surfaces = document.querySelectorAll(surfaceSelector)
+    const active = surfaces[surfaces.length - 1]
+    if (!active) {
+      throw new Error('Active chat surface not found before opening warm tab')
+    }
+    active.setAttribute(marker, '')
+  }, [SURFACE, WARM_SURFACE_MARKER] as [string, string])
 }
 
 /** Wait until the ACTIVE chat surface's transcript contains `text`. */
@@ -391,9 +413,10 @@ test('tab reactivation preserves the mounted transcript without repainting', asy
   // Stack a new tab, then observe the seeded transcript while it is hidden.
   // Installing after the switch isolates reactivation from mutations caused
   // while the new tab was being created.
+  await markWarmResumeSurface(page)
   await openNewSessionTab(page, FIRST_USER_MSG)
   await page.waitForTimeout(500)
-  await installRenderCounter(page, FIRST_USER_MSG)
+  await installRenderCounter(page, undefined, WARM_SURFACE_SELECTOR)
 
   // Step 3: Click back and verify the same kept-alive viewport becomes active
   // without rebuilding or reconciling its transcript.

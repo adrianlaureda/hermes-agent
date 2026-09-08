@@ -41,6 +41,14 @@ function sessionRow(page: import('@playwright/test').Page, text: string) {
   return page.locator('[data-slot="sidebar"] button').filter({ hasText: text }).first()
 }
 
+/** Aprueba el comando retenido cuando el guard de shell lo pausa. */
+async function approvePendingCommand(page: import('@playwright/test').Page): Promise<void> {
+  const runButton = page.getByRole('button', { name: /^Run(?:\s|$)/ }).first()
+
+  await expect(runButton).toBeVisible({ timeout: 10_000 })
+  await runButton.click()
+}
+
 /** Common setup: start a turn with a held bg process + subagent, wait for
  *  the turn to complete, then switch to a new session so the first session is
  *  no longer $selectedStoredSessionId (required before opening a tile). */
@@ -51,6 +59,10 @@ async function startTurnAndSwitchAway(page: import('@playwright/test').Page) {
   await composer.click()
   await composer.type('E2E_SIDEBAR_CROSS', { delay: 20 })
   await page.keyboard.press('Enter')
+
+  // La espera por sentinel es un bucle de shell y pasa por la aprobación
+  // antes de que pueda arrancar el proceso en segundo plano.
+  await approvePendingCommand(page)
 
   // Wait for the user's message to appear.
   await page.waitForFunction(
