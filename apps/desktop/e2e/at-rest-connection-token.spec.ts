@@ -518,10 +518,13 @@ test.beforeEach(() => {
 })
 
 test.afterEach(async () => {
-  await app?.close().catch(() => undefined)
-  app = null
-  sandbox?.cleanup()
-  sandbox = null
+  try {
+    if (app) await closeTracedDesktop(app)
+  } finally {
+    app = null
+    sandbox?.cleanup()
+    sandbox = null
+  }
 })
 
 test.describe('remote gateway session token at rest', () => {

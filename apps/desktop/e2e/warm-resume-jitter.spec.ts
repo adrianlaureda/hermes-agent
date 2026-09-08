@@ -125,7 +125,14 @@ async function setupSeededMockBackend(): Promise<MockBackendFixture> {
 
   // 4. Build env + launch
   const env = buildAppEnv(sandbox)
-  const { app, page } = await launchDesktop(env)
+  const { app, page } = await launchDesktop(env).catch(async error => {
+    try {
+      await mock.close()
+    } finally {
+      sandbox.cleanup()
+    }
+    throw error
+  })
 
   return {
     app,
@@ -134,9 +141,15 @@ async function setupSeededMockBackend(): Promise<MockBackendFixture> {
     mockUrl: mock.url,
     sandbox,
     cleanup: async () => {
-      await closeTracedDesktop(app)
-      await mock.close()
-      sandbox.cleanup()
+      try {
+        await closeTracedDesktop(app)
+      } finally {
+        try {
+          await mock.close()
+        } finally {
+          sandbox.cleanup()
+        }
+      }
     },
   }
 }

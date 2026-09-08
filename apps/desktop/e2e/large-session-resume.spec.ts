@@ -60,7 +60,14 @@ async function setupSeededDesktop(mockServer?: MockServerOptions): Promise<Seede
     await builder.close()
   }
 
-  const { app, page } = await launchDesktop(buildAppEnv(sandbox))
+  const { app, page } = await launchDesktop(buildAppEnv(sandbox)).catch(async error => {
+    try {
+      await mock.close()
+    } finally {
+      sandbox.cleanup()
+    }
+    throw error
+  })
 
   return {
     app,
@@ -69,9 +76,15 @@ async function setupSeededDesktop(mockServer?: MockServerOptions): Promise<Seede
     page,
     sandbox,
     cleanup: async () => {
-      await closeTracedDesktop(app)
-      await mock.close()
-      sandbox.cleanup()
+      try {
+        await closeTracedDesktop(app)
+      } finally {
+        try {
+          await mock.close()
+        } finally {
+          sandbox.cleanup()
+        }
+      }
     },
   }
 }

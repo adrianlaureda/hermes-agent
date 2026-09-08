@@ -58,7 +58,14 @@ async function setupSeededMockBackend(): Promise<MockBackendFixture> {
     await builder.close()
   }
 
-  const { app, page } = await launchDesktop(buildAppEnv(sandbox))
+  const { app, page } = await launchDesktop(buildAppEnv(sandbox)).catch(async error => {
+    try {
+      await mock.close()
+    } finally {
+      sandbox.cleanup()
+    }
+    throw error
+  })
 
   return {
     app,
@@ -67,9 +74,15 @@ async function setupSeededMockBackend(): Promise<MockBackendFixture> {
     mockUrl: mock.url,
     sandbox,
     cleanup: async () => {
-      await closeTracedDesktop(app)
-      await mock.close()
-      sandbox.cleanup()
+      try {
+        await closeTracedDesktop(app)
+      } finally {
+        try {
+          await mock.close()
+        } finally {
+          sandbox.cleanup()
+        }
+      }
     },
   }
 }
@@ -113,7 +126,14 @@ test('live verify-on-stop continuations stay out of the transcript', async ({}, 
   writeMockProviderConfig(sandbox.hermesHome, mock.url)
   fs.appendFileSync(path.join(sandbox.hermesHome, 'config.yaml'), '\nagent:\n  verify_on_stop: true\n', 'utf8')
   writeEnvFile(sandbox.hermesHome)
-  const { app, page } = await launchDesktop(buildAppEnv(sandbox))
+  const { app, page } = await launchDesktop(buildAppEnv(sandbox)).catch(async error => {
+    try {
+      await mock.close()
+    } finally {
+      sandbox.cleanup()
+    }
+    throw error
+  })
   const fixture: MockBackendFixture = {
     app,
     page,
@@ -121,9 +141,15 @@ test('live verify-on-stop continuations stay out of the transcript', async ({}, 
     mockUrl: mock.url,
     sandbox,
     cleanup: async () => {
-      await closeTracedDesktop(app)
-      await mock.close()
-      sandbox.cleanup()
+      try {
+        await closeTracedDesktop(app)
+      } finally {
+        try {
+          await mock.close()
+        } finally {
+          sandbox.cleanup()
+        }
+      }
     },
   }
 
