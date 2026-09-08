@@ -22,6 +22,8 @@ let fixture: DeadBackendFixture | null = null
 
 test.afterAll(async () => {
   if (fixture) {
+    fixture.app.on('close', () => console.log('[quit-probe] app-close'))
+    fixture.app.context().on('close', () => console.log('[quit-probe] context-close'))
     const child = fixture.app.process()
     child.once('exit', (code, signal) => console.log('[quit-probe] process-exit', code, signal))
     child.stderr?.on('data', (data: Buffer) => {
@@ -45,7 +47,12 @@ test.afterAll(async () => {
     })
     console.log('[quit-probe] before-cleanup')
   }
-  await fixture?.cleanup()
+  if (fixture) {
+    await fixture.app.close()
+    console.log('[quit-probe] close-resolved')
+    fixture.sandbox.cleanup()
+    console.log('[quit-probe] sandbox-removed')
+  }
   fixture = null
 })
 
