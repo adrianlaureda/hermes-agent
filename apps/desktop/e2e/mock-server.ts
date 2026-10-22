@@ -421,6 +421,23 @@ export function startMockServer(options: MockServerOptions = {}): Promise<MockSe
             // malformed JSON — treat as non-streaming with defaults
           }
 
+          // Los títulos reutilizan el mensaje inicial: no deben consumir
+          // respuestas del guion de chat ni registrar mensajes del usuario.
+          const titleSchemaName = parsed.response_format?.json_schema?.name
+          if (titleSchemaName === 'session_title') {
+            const titleMessages: any[] = Array.isArray(parsed.messages) ? parsed.messages : []
+            const titleUserMessage = [...titleMessages]
+              .reverse()
+              .find(message => message?.role === 'user')
+            const titleUserText = typeof titleUserMessage?.content === 'string'
+              ? titleUserMessage.content.trim()
+              : ''
+            const title = titleUserText.split(/\s+/).filter(Boolean).slice(0, 7).join(' ')
+
+            nonStreamingTextResponse(res, parsed.model || 'mock-model', JSON.stringify({ title }))
+            return
+          }
+
           const lastUserMessage = [...(parsed.messages ?? [])]
             .reverse()
             .find((message: { role?: unknown }) => message?.role === 'user')

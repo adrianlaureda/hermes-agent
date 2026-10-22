@@ -1,3 +1,5 @@
+import { closeTracedDesktop } from './desktop-trace'
+
 import * as path from 'node:path'
 
 import { type TestInfo } from '@playwright/test'
@@ -58,7 +60,14 @@ async function setupSeededDesktop(mockServer?: MockServerOptions): Promise<Seede
     await builder.close()
   }
 
-  const { app, page } = await launchDesktop(buildAppEnv(sandbox))
+  const { app, page } = await launchDesktop(buildAppEnv(sandbox)).catch(async error => {
+    try {
+      await mock.close()
+    } finally {
+      sandbox.cleanup()
+    }
+    throw error
+  })
 
   return {
     app,
@@ -67,9 +76,15 @@ async function setupSeededDesktop(mockServer?: MockServerOptions): Promise<Seede
     page,
     sandbox,
     cleanup: async () => {
-      await app.close().catch(() => undefined)
-      await mock.close()
-      sandbox.cleanup()
+      try {
+        await closeTracedDesktop(app)
+      } finally {
+        try {
+          await mock.close()
+        } finally {
+          sandbox.cleanup()
+        }
+      }
     },
   }
 }

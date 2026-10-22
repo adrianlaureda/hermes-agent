@@ -1,3 +1,5 @@
+import { closeTracedDesktop } from './desktop-trace'
+
 /**
  * Regression coverage for an attached image in a durable session. The gateway
  * persists the turn, the builder exits, and desktop renders it from SessionDB
@@ -27,8 +29,7 @@ import { type MockServer, startMockServer } from './mock-server'
 import { RealSessionBuilder } from './real-session-builder'
 import { type ElectronApplication, expect, type Page, test } from './test'
 
-// A seeded session has no generated title, so every label falls back to the
-// session preview — the first 60 characters of the first user message.
+// La sesión sembrada tiene un título explícito; la etiqueta lateral debe conservarlo.
 const SESSION_TITLE = 'E2E attached image session'
 const CAPTION = 'E2E attached image must survive a relaunch'
 const IMAGE_DIR = 'Application Support/e2e shots'
@@ -74,7 +75,14 @@ async function setupSeededDesktop(): Promise<SeededFixture> {
     await builder.close()
   }
 
-  const { app, page } = await launchDesktop(buildAppEnv(sandbox))
+  const { app, page } = await launchDesktop(buildAppEnv(sandbox)).catch(async error => {
+    try {
+      await mock.close()
+    } finally {
+      sandbox.cleanup()
+    }
+    throw error
+  })
 
   return {
     app,
@@ -82,15 +90,21 @@ async function setupSeededDesktop(): Promise<SeededFixture> {
     page,
     sandbox,
     cleanup: async () => {
-      await app.close().catch(() => undefined)
-      await mock.close()
-      sandbox.cleanup()
+      try {
+        await closeTracedDesktop(app)
+      } finally {
+        try {
+          await mock.close()
+        } finally {
+          sandbox.cleanup()
+        }
+      }
     },
   }
 }
 
 function sessionRow(page: Page) {
-  return page.locator('[data-slot="sidebar"] button').filter({ hasText: CAPTION }).first()
+  return page.locator('[data-slot="sidebar"] button').filter({ hasText: SESSION_TITLE }).first()
 }
 
 // Inactive tabs stay mounted under a data-pane-hidden ancestor. Match the
@@ -172,13 +186,13 @@ test.describe('attached image resume', () => {
     fixture = await setupSeededDesktop()
     await waitForAppReady(fixture, 120_000)
 
-    // The sidebar labels a session by its preview, so the caption has to lead
-    // the persisted turn — a leading directive reads as a truncated file path.
+    // La sesión sembrada tiene un título explícito; la barra lateral debe
+    // mostrarlo en lugar de recurrir al pie o a la ruta de imagen.
     const row = sessionRow(fixture.page)
     await row.waitFor({ state: 'visible', timeout: 60_000 })
 
     const label = (await row.textContent())?.trim() ?? ''
-    expect(label.startsWith(CAPTION), `sidebar label should open with the caption: ${label}`).toBe(true)
+    expect(label.startsWith(SESSION_TITLE), `sidebar label should open with the title: ${label}`).toBe(true)
 
     await openSeededSession(fixture.page)
     await assertRendersThumbnail(fixture.page, 'first open')

@@ -180,6 +180,16 @@ test.describe('interim assistant messages — flag OFF', () => {
     fixture = await setupMockBackend({
       extraDisplayConfig: '  interim_assistant_messages: false',
     })
+    fixture.page.on('websocket', socket => {
+      socket.on('framereceived', frame => {
+        const data = JSON.parse(String(frame.payload))
+        const event = data.params
+        if (event?.type === 'message.interim' || event?.type === 'message.complete') {
+          console.log('[interim-probe]', JSON.stringify({ type: event.type, text: event.payload?.text }))
+        }
+      })
+    })
+    await fixture.page.reload()
     await waitForAppReady(fixture, 120_000)
   })
 

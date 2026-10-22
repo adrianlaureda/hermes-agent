@@ -50,12 +50,15 @@ test.describe('session compression', () => {
 
     // Three completed exchanges leave a compressible middle after the
     // compressor's protected head/tail boundaries.
-    await send(page, 'E2E_COMPRESSION_FIRST')
-    await waitForTranscript(page, reply)
-    await send(page, 'E2E_COMPRESSION_SECOND')
-    await expect.poll(() => receivedUserTexts().filter(text => text === 'E2E_COMPRESSION_SECOND').length).toBe(1)
-    await send(page, 'E2E_COMPRESSION_THIRD')
-    await expect.poll(() => receivedUserTexts().filter(text => text === 'E2E_COMPRESSION_THIRD').length).toBe(1)
+    const viewport = page.locator('[data-slot="aui_thread-viewport"]')
+    for (const [index, prompt] of ['E2E_COMPRESSION_FIRST', 'E2E_COMPRESSION_SECOND', 'E2E_COMPRESSION_THIRD'].entries()) {
+      await send(page, prompt)
+      await expect.poll(() => receivedUserTexts().filter(text => text === prompt).length).toBe(1)
+      // Recibir la petición HTTP no implica que el turno haya terminado.
+      // Esperamos su respuesta y el estado libre antes del siguiente envío.
+      await expect(viewport.getByText(reply, { exact: true })).toHaveCount(index + 1)
+      await expect(page.getByRole('button', { name: 'Stop', exact: true })).toHaveCount(0)
+    }
 
     // This test covers compression and continuation, not slash completion.
     // Insert the complete command atomically and click Send so an async
@@ -124,7 +127,8 @@ auxiliary:
     await expect(page.getByRole('status', { name: 'Summarizing thread' }).last()).toBeVisible()
 
     const primary = page.locator('[data-slot="composer-root"] button[type="submit"]')
-    await expect(primary).toHaveAttribute('aria-label', 'Queue message')
+    // El control vacío muestra Stop; Enter conserva la semántica de cola al compactar.
+    await expect(primary).toHaveAttribute('aria-label', 'Stop')
 
     await send(page, queued)
     await expect(page.getByText('1 Queued')).toBeVisible()

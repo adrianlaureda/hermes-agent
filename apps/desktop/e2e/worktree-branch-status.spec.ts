@@ -1,3 +1,5 @@
+import { closeTracedDesktop } from './desktop-trace'
+
 import { execFileSync } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as path from 'node:path'
@@ -86,7 +88,14 @@ test.beforeAll(async () => {
 
   configureRepoCwd(sandbox.hermesHome, mock.url, repo)
 
-  const { app, page } = await launchDesktop(buildAppEnv(sandbox))
+  const { app, page } = await launchDesktop(buildAppEnv(sandbox)).catch(async error => {
+    try {
+      await mock.close()
+    } finally {
+      sandbox.cleanup()
+    }
+    throw error
+  })
   fixture = {
     app,
     page,
@@ -94,9 +103,15 @@ test.beforeAll(async () => {
     mockUrl: mock.url,
     sandbox,
     cleanup: async () => {
-      await app.close().catch(() => undefined)
-      await mock.close()
-      sandbox.cleanup()
+      try {
+        await closeTracedDesktop(app)
+      } finally {
+        try {
+          await mock.close()
+        } finally {
+          sandbox.cleanup()
+        }
+      }
     },
   }
 

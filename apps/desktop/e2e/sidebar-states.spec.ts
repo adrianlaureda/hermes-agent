@@ -56,6 +56,14 @@ async function sendMessageAndWait(
   )
 }
 
+/** Aprueba el comando retenido cuando el guard de shell lo pausa. */
+async function approvePendingCommand(page: Page): Promise<void> {
+  const runButton = page.getByRole('button', { name: /^Run(?:\s|$)/ }).first()
+
+  await expect(runButton).toBeVisible({ timeout: 10_000 })
+  await runButton.click()
+}
+
 // ────────────────────────────────────────────────────────────────────────
 // Test 1: background process + subagent appear in sidebar during turn
 // ────────────────────────────────────────────────────────────────────────
@@ -212,6 +220,10 @@ test.describe('sidebar states — cross-session dot transition', () => {
     await composer.click()
     await composer.type('E2E_SIDEBAR_CROSS', { delay: 20 })
     await page.keyboard.press('Enter')
+
+    // La espera por sentinel es un bucle de shell y pasa por la aprobación
+    // antes de que pueda arrancar el proceso en segundo plano.
+    await approvePendingCommand(page)
 
     // Wait for the background dot to appear.
     await expect

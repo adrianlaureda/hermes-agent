@@ -7481,6 +7481,7 @@ def _legacy_display_kind(role: str, text: str) -> str | None:
 def _history_to_messages(history: list[dict]) -> list[dict]:
     messages = []
     tool_call_args = {}
+    show_interim = _load_interim_assistant_messages()
 
     for m in history:
         if not isinstance(m, dict):
@@ -7508,7 +7509,9 @@ def _history_to_messages(history: list[dict]) -> list[dict]:
                     except (json.JSONDecodeError, TypeError):
                         args = {}
                     tool_call_args[tc_id] = (fn["name"], args)
-            if not content_text.strip():
+            # La recarga respeta la misma preferencia que los eventos en vivo.
+            # Los argumentos se registran antes para conservar las herramientas.
+            if not show_interim or not content_text.strip():
                 continue
         if role == "tool":
             tc_id = m.get("tool_call_id", "")

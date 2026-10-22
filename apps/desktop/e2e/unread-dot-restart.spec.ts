@@ -1,3 +1,5 @@
+import { closeTracedDesktop } from './desktop-trace'
+
 /**
  * E2E test for PERSISTED unread state — the green "Finished — unread" dot
  * must survive an app restart.
@@ -79,19 +81,20 @@ test.describe('unread dot survives app restart', () => {
     // The fixture's own app handle may already be closed by the restart
     // steps — close whatever is current, then drop the sandbox + mock.
     try {
-      await app?.close()
-    } catch {
-      // already closed
+      if (app) await closeTracedDesktop(app)
+    } finally {
+      try {
+        await fixture?.mock.close()
+      } finally {
+        fixture?.sandbox.cleanup()
+      }
     }
-
-    fixture?.mock.close()
-    fixture?.sandbox.cleanup()
   })
 
   /** Relaunch the desktop app against the SAME sandbox (same userData →
    *  same localStorage, same HERMES_HOME → same session store). */
   async function restartApp(): Promise<void> {
-    await app.close()
+    await closeTracedDesktop(app)
 
     const relaunched = await launchDesktop(buildAppEnv(fixture.sandbox))
     app = relaunched.app
